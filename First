@@ -91,6 +91,8 @@ local evadeCooldown = 1.5
 local isCounterEvading = false
 local lastCounterEvadeTime = 0
 local counterEvadeCooldown = 1
+local lockedTarget = nil  -- 【新增】鎖定的目標
+local targetLockStartTime = 0  -- 【新增】目標鎖定開始時間
 
 -- ====================
 -- ShiftLock 系統
@@ -307,41 +309,31 @@ local function findNearestKiller()
     return nearestKiller, minDistance
 end
 
--- 4種半圓路徑模式
+-- ==========================================================
+-- 修改 1: 反繞路徑定義（只保留左後和右後）
+-- ==========================================================
 local EVADE_PATHS = {
-    LEFT_FORWARD = 1,   -- 左轉半圓，終點在正前方
-    LEFT_BACK = 2,      -- 左轉半圓，終點在左後方
-    RIGHT_FORWARD = 3,  -- 右轉半圓，終點在正前方
-    RIGHT_BACK = 4      -- 右轉半圓，終點在右後方
+    LEFT_BACK = 1,      -- 左轉半圓，終點在左後方
+    RIGHT_BACK = 2      -- 右轉半圓，終點在右後方
 }
 
--- 計算指定路徑模式的半圓參數
+-- ==========================================================
+-- 修改 2: 路徑參數計算（只處理左後與右後）
+-- ==========================================================
 local function getPathParameters(mode, hrpPos, killerPos, radius)
     local directionToKiller = (killerPos - hrpPos).Unit
     local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
     
     local startAngle, endAngle, centerPos
     
-    if mode == EVADE_PATHS.LEFT_FORWARD then
-        -- 左轉半圓，終點在正前方（原本的左轉）
-        startAngle = 0
-        endAngle = math.pi
-        centerPos = hrpPos - directionToKiller * radius
-        
-    elseif mode == EVADE_PATHS.LEFT_BACK then
+    if mode == EVADE_PATHS.LEFT_BACK then
         -- 左轉半圓，終點在左後方
         startAngle = math.pi / 2
         endAngle = math.pi * 1.5
         centerPos = hrpPos + perpendicular * radius
         
-    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
-        -- 右轉半圓，終點在正前方
-        startAngle = math.pi
-        endAngle = math.pi * 2
-        centerPos = hrpPos - directionToKiller * radius
-        
     elseif mode == EVADE_PATHS.RIGHT_BACK then
-        -- 右轉半圓，終點在右後方（原本的右轉）
+        -- 右轉半圓，終點在右後方
         startAngle = math.pi
         endAngle = math.pi * 2
         centerPos = hrpPos - perpendicular * radius
@@ -350,7 +342,9 @@ local function getPathParameters(mode, hrpPos, killerPos, radius)
     return startAngle, endAngle, centerPos
 end
 
--- 評估路徑的安全性和有效性
+-- ==========================================================
+-- 修改 3: 路徑評估（只評估左後與右後，並給予同等高優先）
+-- ==========================================================
 local function evaluatePath(mode, hrpPos, killerPos, radius, char)
     local startAngle, endAngle, centerPos = getPathParameters(mode, hrpPos, killerPos, radius)
     
@@ -379,19 +373,16 @@ local function evaluatePath(mode, hrpPos, killerPos, radius, char)
         if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
             clearPoints = clearPoints + 1
         else
-            -- 記錄是否有嚴重阻擋
             if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
                 hasBlockedPath = true
             end
         end
         
-        -- 計算終點離殺手的距離
         if i == testPoints then
             totalDistance = (testPoint - killerPos).Magnitude
         end
     end
     
-    -- 如果路徑嚴重被阻擋，大幅降低分數
     if hasBlockedPath then
         clearPoints = clearPoints * 0.3
     end
@@ -399,30 +390,24 @@ local function evaluatePath(mode, hrpPos, killerPos, radius, char)
     -- 基礎評分：安全點數量 + 終點距離加成
     local score = clearPoints + (totalDistance / 10)
     
-    -- 優先級加成：往後方繞的路徑獲得巨大加成（因為殺手後退會變慢）
-    if mode == EVADE_PATHS.LEFT_BACK then
-        score = score + 100  -- 左後方路徑加成
-    elseif mode == EVADE_PATHS.RIGHT_BACK then
-        score = score + 100  -- 右後方路徑加成
-    elseif mode == EVADE_PATHS.LEFT_FORWARD then
-        score = score + 20   -- 正前方路徑次優
-    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
-        score = score + 20   -- 正前方路徑次優
-    end
+    -- 兩種路徑都是後方繞圓，給予相同的高優先級
+    score = score + 100
     
     return score, clearPoints, hasBlockedPath
 end
 
--- 選擇最佳逃離路徑
+-- ==========================================================
+-- 修改 4: 路徑選擇（只在左後與右後之間選擇）
+-- ==========================================================
 local function chooseBestPath(hrpPos, killerPos, radius, char)
-    local bestMode = EVADE_PATHS.LEFT_FORWARD
+    local bestMode = EVADE_PATHS.LEFT_BACK
     local bestScore = -1
     local allPathsBlocked = true
     
-    -- 評估所有4種路徑
-    for mode = 1, 4 do
+    -- 只評估 2 種路徑：左後和右後
+    for mode = 1, 2 do
         local score, clearPoints, blocked = evaluatePath(mode, hrpPos, killerPos, radius, char)
-        if clearPoints > 4 then  -- 至少一半的點是通暢的
+        if clearPoints > 4 then
             allPathsBlocked = false
         end
         
@@ -432,7 +417,6 @@ local function chooseBestPath(hrpPos, killerPos, radius, char)
         end
     end
     
-    -- 如果所有路徑都被嚴重阻擋，返回 nil 表示需要使用應急策略
     if allPathsBlocked then
         return nil
     end
@@ -622,7 +606,7 @@ local function performEvade()
     -- 尋找最佳半徑
     local evadeRadius = findBestEvadeRadius(hrp.Position, killerHRP.Position, true, char)
     
-    -- 選擇最佳路徑模式（4種半圓路徑）
+    -- 選擇最佳路徑模式（只會在左後/右後選擇）
     local bestPathMode = chooseBestPath(hrp.Position, killerHRP.Position, evadeRadius, char)
     
     -- 如果所有路徑都被阻擋（被逼到角落），使用應急策略
@@ -686,27 +670,19 @@ local function performEvade()
                     
                     -- 如果連續多次卡住，嘗試切換路徑
                     if consecutiveStuckCount >= maxStuckCount then
+                        -- ==========================================================
+                        -- 修改 5: 路徑切換邏輯（只在左後 <-> 右後 切換）
+                        -- ==========================================================
                         print("⚠️ 檢測到撞牆，嘗試切換路徑...")
                         
-                        -- 標記當前路徑為不可用
-                        local excludePath = bestPathMode
+                        -- 切換到另一條路徑（左後 <-> 右後）
+                        local newBestMode = (bestPathMode == EVADE_PATHS.LEFT_BACK) and EVADE_PATHS.RIGHT_BACK or EVADE_PATHS.LEFT_BACK
                         
-                        -- 重新評估其他路徑
-                        local newBestMode = bestPathMode
-                        local newBestScore = -999
-                        
-                        for mode = 1, 4 do
-                            if mode ~= excludePath then
-                                local score = evaluatePath(mode, hrp.Position, killerHRP.Position, evadeRadius, char)
-                                if score > newBestScore then
-                                    newBestScore = score
-                                    newBestMode = mode
-                                end
-                            end
-                        end
+                        -- 評估新路徑
+                        local score = evaluatePath(newBestMode, hrp.Position, killerHRP.Position, evadeRadius, char)
                         
                         -- 切換到新路徑
-                        if newBestMode ~= bestPathMode then
+                        if score > 0 then
                             bestPathMode = newBestMode
                             startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
                             
@@ -718,7 +694,7 @@ local function performEvade()
                             
                             print("✅ 已切換到新路徑模式: " .. newBestMode)
                         else
-                            -- 如果沒有更好的路徑，嘗試減小半徑
+                            -- 如果新路徑也不行，嘗試減小半徑
                             evadeRadius = evadeRadius * 0.7
                             startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
                             steps = math.ceil((math.pi * evadeRadius / values.evadeSpeed) / 0.03)
@@ -804,11 +780,9 @@ local function performEvade()
     end)
 end
 
--- ====================
--- 防反繞系統（殺手模式）
--- ====================
-
--- 尋找最近的其他玩家
+-- ==========================================================
+-- 修改 7: 尋找最近玩家函數（支援鎖定）
+-- ==========================================================
 local function findNearestPlayer()
     local char = player.Character
     if not char then return nil, math.huge end
@@ -816,6 +790,20 @@ local function findNearestPlayer()
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, math.huge end
     
+    -- 如果有鎖定的目標，且鎖定時間未超過 3 秒，繼續追擊該目標
+    local currentTime = tick()
+    if lockedTarget and (currentTime - targetLockStartTime) < 3 then
+        if lockedTarget.Character then
+            local targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
+            if targetHRP then
+                local distance = (hrp.Position - targetHRP.Position).Magnitude
+                print("🎯 繼續鎖定目標：", lockedTarget.Name, "剩餘時間：", string.format("%.1f", 3 - (currentTime - targetLockStartTime)))
+                return lockedTarget, distance
+            end
+        end
+    end
+    
+    -- 如果沒有鎖定目標，或鎖定時間已過，尋找新的最近玩家
     local nearestPlayer = nil
     local minDistance = math.huge
     
@@ -832,8 +820,19 @@ local function findNearestPlayer()
         end
     end
     
+    -- 如果找到新目標，鎖定它
+    if nearestPlayer then
+        lockedTarget = nearestPlayer
+        targetLockStartTime = currentTime
+        print("🔒 鎖定新目標：", nearestPlayer.Name)
+    end
+    
     return nearestPlayer, minDistance
 end
+
+-- ====================
+-- 防反繞系統（殺手模式）
+-- ====================
 
 -- 執行防反繞動作（殺手追擊玩家）
 local function performCounterEvade()
@@ -935,9 +934,13 @@ local function performCounterEvade()
                 break
             end
 
+            -- ==========================================================
+            -- 修改 8: 防反繞追擊函數（持續追擊鎖定的目標，不更新目標）
+            -- ==========================================================
+            if lockedTarget and lockedTarget.Character then
+                targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
+            end
             
-            -- 更新目標位置
-            targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
             if not targetHRP then 
                 print("❌ [防反繞] 目標消失")
                 break 
@@ -1003,8 +1006,16 @@ local function startAutoEvade()
                 end
             end
         end)
+    else
+        if connections.autoEvade then
+            connections.autoEvade:Disconnect()
+            connections.autoEvade = nil
+        end
     end
 end
+
+-- 其餘程式碼（UI、快捷鍵等）保留不動
+[...]
 
 -- ====================
 -- ESP 顯示系統
