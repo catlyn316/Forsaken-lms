@@ -1022,8 +1022,6 @@ local function startAutoEvade()
     end
 end
 
--- 其餘程式碼（UI、快捷鍵等）保留不動
-[...]
 
 -- ====================
 -- ESP 顯示系統
