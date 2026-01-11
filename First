@@ -1,0 +1,2630 @@
+-- Roblox 全能控制器 (修改版 v3.0 - 自動反繞系統)
+-- 更新：簡化UI，新增智能反繞功能
+
+local CoreGui = game:GetService("CoreGui")
+local Players = game:GetService("Players")
+local player = Players.LocalPlayer
+local playerGui = player:WaitForChild("PlayerGui")
+local Workspace = game:GetService("Workspace")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+local Lighting = game:GetService("Lighting")
+local PathfindingService = game:GetService("PathfindingService")
+local TweenService = game:GetService("TweenService")
+
+-- 防止重複執行
+if CoreGui:FindFirstChild("SpeedJumpController") then CoreGui.SpeedJumpController:Destroy() end
+if playerGui:FindFirstChild("SpeedJumpController") then playerGui.SpeedJumpController:Destroy() end
+if CoreGui:FindFirstChild("ShiftLockUI") then CoreGui.ShiftLockUI:Destroy() end
+if playerGui:FindFirstChild("ShiftLockUI") then playerGui.ShiftLockUI:Destroy() end
+
+-- ShiftLock 系統變數
+local shiftLockEnabled = false
+local shiftLockConnection = nil
+local shiftLockUI = nil
+
+-- ====================
+-- 核心變數與備份
+-- ====================
+
+-- 鎖定最原始的光照設定
+local trueLightingBackup = {
+    Ambient = Lighting.Ambient,
+    OutdoorAmbient = Lighting.OutdoorAmbient,
+    Brightness = Lighting.Brightness,
+    ColorShift_Bottom = Lighting.ColorShift_Bottom,
+    ColorShift_Top = Lighting.ColorShift_Top,
+    FogEnd = Lighting.FogEnd
+}
+
+-- 初始角色數值
+local originalSpeed = 16
+local hasOriginalValues = false
+
+-- 功能狀態開關
+local toggles = {
+    speed = false,
+    fullbright = false,
+    cameraDist = false,
+    nofog = false,
+    noFilter = false,
+    autoEvade = false,
+    generatorESP = false,
+    itemESP = false,
+    autoInvisible = false,
+    counterEvadeMode = "disguise"  -- "disguise" 或 "fullpower"
+}
+
+-- 數值設定
+local values = {
+    speed = 34,
+    fullbright = 1,
+    cameraDist = 80,
+    evadeRange = 15,
+    evadeSpeed = 30
+}
+
+-- 連線儲存
+local connections = {
+    speed = nil,
+    fullbright = nil,
+    nofog = nil,
+    noFilter = nil,
+    autoEvade = nil,
+    generatorESP = nil,
+    itemESP = nil,
+    autoInvisible = nil
+}
+
+-- ESP 顯示緩存
+local espObjects = {
+    generators = {},
+    items = {}
+}
+
+-- 自動反繞系統變數
+local isEvading = false
+local lastEvadeTime = 0
+local evadeCooldown = 1.5
+
+-- 防反繞系統變數
+local isCounterEvading = false
+local lastCounterEvadeTime = 0
+local counterEvadeCooldown = 1
+
+-- ====================
+-- ShiftLock 系統
+-- ====================
+
+-- 禁用 ShiftLock
+local function disableShiftLock()
+    if not shiftLockEnabled then return end
+    
+    shiftLockEnabled = false
+    
+    if shiftLockConnection then
+        shiftLockConnection:Disconnect()
+        shiftLockConnection = nil
+    end
+    
+    -- 恢復滑鼠
+    if UserInputService.MouseEnabled then
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    end
+    
+    -- 恢復自動旋轉
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.AutoRotate = true
+        end
+    end
+end
+
+-- 啟用 ShiftLock
+local function enableShiftLock()
+    if shiftLockEnabled then return end
+    
+    shiftLockEnabled = true
+    
+    -- 鎖定滑鼠
+    if UserInputService.MouseEnabled then
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    end
+    
+    local char = player.Character
+    if not char then return end
+    
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hum or not hrp then return end
+    
+    hum.AutoRotate = false
+    
+    if shiftLockConnection then shiftLockConnection:Disconnect() end
+    
+    shiftLockConnection = RunService.RenderStepped:Connect(function()
+        local myChar = player.Character
+        if not myChar then return end
+        
+        local myHRP = myChar:FindFirstChild("HumanoidRootPart")
+        if not myHRP then return end
+        
+        local cam = Workspace.CurrentCamera
+        if not cam then return end
+        
+        local lookVector = cam.CFrame.LookVector
+        local flatDir = Vector3.new(lookVector.X, 0, lookVector.Z)
+        
+        if flatDir.Magnitude > 0.001 then
+            myHRP.CFrame = CFrame.lookAt(myHRP.Position, myHRP.Position + flatDir.Unit, Vector3.yAxis)
+        end
+    end)
+end
+
+-- ====================
+-- 核心邏輯函數
+-- ====================
+
+-- 獲取初始值
+local function getOriginalValues()
+    if toggles.speed then return end
+    
+    local character = player.Character
+    if character then
+        local humanoid = character:FindFirstChildOfClass("Humanoid")
+        if humanoid then
+            originalSpeed = humanoid.WalkSpeed
+        end
+    end
+    hasOriginalValues = true
+end
+
+-- 智能光照管理器
+local function updateLighting()
+    if toggles.fullbright then
+        if connections.fullbright then connections.fullbright:Disconnect() end
+        
+        connections.fullbright = RunService.RenderStepped:Connect(function()
+            local ambientValue = math.min(values.fullbright, 99)
+            Lighting.Ambient = Color3.new(ambientValue, ambientValue, ambientValue)
+            Lighting.Brightness = values.fullbright
+            Lighting.ColorShift_Bottom = Color3.new(ambientValue, ambientValue, ambientValue)
+            Lighting.ColorShift_Top = Color3.new(ambientValue, ambientValue, ambientValue)
+            Lighting.OutdoorAmbient = Color3.new(ambientValue, ambientValue, ambientValue)
+        end)
+    else
+        if connections.fullbright then connections.fullbright:Disconnect() end
+        
+        Lighting.Ambient = trueLightingBackup.Ambient
+        Lighting.Brightness = trueLightingBackup.Brightness
+        Lighting.OutdoorAmbient = trueLightingBackup.OutdoorAmbient
+        Lighting.ColorShift_Bottom = trueLightingBackup.ColorShift_Bottom
+        Lighting.ColorShift_Top = trueLightingBackup.ColorShift_Top
+    end
+end
+
+-- 應用速度
+local function applySpeed(char)
+    if not char then char = player.Character end
+    if not char then return end
+    local hum = char:WaitForChild("Humanoid", 10)
+    if not hum then return end
+
+    if connections.speed then connections.speed:Disconnect() end
+    
+    if toggles.speed then
+        hum.WalkSpeed = values.speed
+        connections.speed = hum:GetPropertyChangedSignal("WalkSpeed"):Connect(function()
+            if toggles.speed then hum.WalkSpeed = values.speed end
+        end)
+    else
+        hum.WalkSpeed = originalSpeed
+    end
+end
+
+-- ====================
+-- 自動反繞系統
+-- ====================
+
+-- 檢查玩家是否為殺手
+local function isPlayerKiller()
+    -- 調試輸出
+    print("🔍 開始檢測玩家身份...")
+    print("   當前玩家名稱：", player.Name)
+    
+    local playersFolder = Workspace:FindFirstChild("Players")
+    if not playersFolder then 
+        print("   ❌ 找不到 Workspace.Players")
+        return false 
+    end
+    print("   ✅ 找到 Workspace.Players")
+    
+    local killersFolder = playersFolder:FindFirstChild("Killers")
+    if not killersFolder then 
+        print("   ❌ 找不到 Workspace.Players.Killers")
+        return false 
+    end
+    print("   ✅ 找到 Workspace.Players.Killers")
+    
+    -- 遍歷所有殺手角色
+    print("   🔎 開始檢查殺手列表...")
+    for _, killerChar in pairs(killersFolder:GetChildren()) do
+        if killerChar:IsA("Model") then
+            print("      檢查角色：", killerChar.Name)
+            
+            -- 檢查 Attributes 中的 Username（大寫 U）
+            local username = killerChar:GetAttribute("Username")
+            print("         Username 屬性值：", username or "nil")
+            
+            if username then
+                if username == player.Name then
+                    print("   ✅✅✅ 匹配成功！你是殺手！")
+                    return true
+                else
+                    print("         不匹配（", username, "≠", player.Name, "）")
+                end
+            else
+                print("         警告：此角色沒有 Username 屬性")
+            end
+        end
+    end
+    
+    print("   ❌ 檢查完畢，你不是殺手")
+    return false
+end
+
+-- 尋找最近的殺手
+local function findNearestKiller()
+    local char = player.Character
+    if not char then return nil, math.huge end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, math.huge end
+    
+    local killersFolder = Workspace:FindFirstChild("Players")
+    if not killersFolder then return nil, math.huge end
+    killersFolder = killersFolder:FindFirstChild("Killers")
+    if not killersFolder then return nil, math.huge end
+    
+    local nearestKiller = nil
+    local minDistance = math.huge
+    
+    for _, killerChar in pairs(killersFolder:GetChildren()) do
+        if killerChar:IsA("Model") then
+            local killerHRP = killerChar:FindFirstChild("HumanoidRootPart")
+            if killerHRP then
+                local distance = (hrp.Position - killerHRP.Position).Magnitude
+                if distance < minDistance then
+                    minDistance = distance
+                    nearestKiller = killerChar
+                end
+            end
+        end
+    end
+    
+    return nearestKiller, minDistance
+end
+
+-- 4種半圓路徑模式
+local EVADE_PATHS = {
+    LEFT_FORWARD = 1,   -- 左轉半圓，終點在正前方
+    LEFT_BACK = 2,      -- 左轉半圓，終點在左後方
+    RIGHT_FORWARD = 3,  -- 右轉半圓，終點在正前方
+    RIGHT_BACK = 4      -- 右轉半圓，終點在右後方
+}
+
+-- 計算指定路徑模式的半圓參數
+local function getPathParameters(mode, hrpPos, killerPos, radius)
+    local directionToKiller = (killerPos - hrpPos).Unit
+    local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
+    
+    local startAngle, endAngle, centerPos
+    
+    if mode == EVADE_PATHS.LEFT_FORWARD then
+        -- 左轉半圓，終點在正前方（原本的左轉）
+        startAngle = 0
+        endAngle = math.pi
+        centerPos = hrpPos - directionToKiller * radius
+        
+    elseif mode == EVADE_PATHS.LEFT_BACK then
+        -- 左轉半圓，終點在左後方
+        startAngle = math.pi / 2
+        endAngle = math.pi * 1.5
+        centerPos = hrpPos + perpendicular * radius
+        
+    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
+        -- 右轉半圓，終點在正前方
+        startAngle = math.pi
+        endAngle = math.pi * 2
+        centerPos = hrpPos - directionToKiller * radius
+        
+    elseif mode == EVADE_PATHS.RIGHT_BACK then
+        -- 右轉半圓，終點在右後方（原本的右轉）
+        startAngle = math.pi
+        endAngle = math.pi * 2
+        centerPos = hrpPos - perpendicular * radius
+    end
+    
+    return startAngle, endAngle, centerPos
+end
+
+-- 評估路徑的安全性和有效性
+local function evaluatePath(mode, hrpPos, killerPos, radius, char)
+    local startAngle, endAngle, centerPos = getPathParameters(mode, hrpPos, killerPos, radius)
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    -- 測試路徑上的多個點
+    local testPoints = 8
+    local clearPoints = 0
+    local totalDistance = 0
+    local hasBlockedPath = false
+    
+    for i = 0, testPoints do
+        local t = i / testPoints
+        local angle = startAngle + (endAngle - startAngle) * t
+        local offset = Vector3.new(
+            math.cos(angle) * radius,
+            0,
+            math.sin(angle) * radius
+        )
+        local testPoint = centerPos + offset
+        
+        -- 檢查這個點是否能安全到達
+        local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
+        if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
+            clearPoints = clearPoints + 1
+        else
+            -- 記錄是否有嚴重阻擋
+            if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
+                hasBlockedPath = true
+            end
+        end
+        
+        -- 計算終點離殺手的距離
+        if i == testPoints then
+            totalDistance = (testPoint - killerPos).Magnitude
+        end
+    end
+    
+    -- 如果路徑嚴重被阻擋，大幅降低分數
+    if hasBlockedPath then
+        clearPoints = clearPoints * 0.3
+    end
+    
+    -- 基礎評分：安全點數量 + 終點距離加成
+    local score = clearPoints + (totalDistance / 10)
+    
+    -- 優先級加成：往後方繞的路徑獲得巨大加成（因為殺手後退會變慢）
+    if mode == EVADE_PATHS.LEFT_BACK then
+        score = score + 100  -- 左後方路徑加成
+    elseif mode == EVADE_PATHS.RIGHT_BACK then
+        score = score + 100  -- 右後方路徑加成
+    elseif mode == EVADE_PATHS.LEFT_FORWARD then
+        score = score + 20   -- 正前方路徑次優
+    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
+        score = score + 20   -- 正前方路徑次優
+    end
+    
+    return score, clearPoints, hasBlockedPath
+end
+
+-- 選擇最佳逃離路徑
+local function chooseBestPath(hrpPos, killerPos, radius, char)
+    local bestMode = EVADE_PATHS.LEFT_FORWARD
+    local bestScore = -1
+    local allPathsBlocked = true
+    
+    -- 評估所有4種路徑
+    for mode = 1, 4 do
+        local score, clearPoints, blocked = evaluatePath(mode, hrpPos, killerPos, radius, char)
+        if clearPoints > 4 then  -- 至少一半的點是通暢的
+            allPathsBlocked = false
+        end
+        
+        if score > bestScore then
+            bestScore = score
+            bestMode = mode
+        end
+    end
+    
+    -- 如果所有路徑都被嚴重阻擋，返回 nil 表示需要使用應急策略
+    if allPathsBlocked then
+        return nil
+    end
+    
+    return bestMode
+end
+
+-- 應急逃離策略：當被逼到角落時使用（智能選擇逃離方向）
+local function emergencyEvade(hrp, killerHRP, humanoid, char)
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+    bodyVelocity.P = 10000
+    bodyVelocity.Parent = hrp
+    
+    humanoid.AutoRotate = false
+    
+    -- 計算基準方向
+    local toKillerDirection = (killerHRP.Position - hrp.Position).Unit
+    local awayDirection = -toKillerDirection
+    
+    -- 評估所有可能的逃離方向
+    local bestDirection = awayDirection
+    local maxScore = -math.huge
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    -- 測試 360 度所有方向，但根據與殺手的角度給予不同評分
+    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do  -- 每 22.5 度測試一次
+        local testDirection = Vector3.new(
+            math.cos(angle),
+            0,
+            math.sin(angle)
+        )
+        
+        -- 計算這個方向與殺手的角度關係
+        local dotProduct = testDirection:Dot(toKillerDirection)
+        
+        -- 如果方向太靠近殺手（正面 120 度範圍內），大幅降低評分
+        if dotProduct > 0.5 then  -- 正面約 60 度範圍
+            continue  -- 跳過這個方向，絕不正面衝向殺手
+        end
+        
+        -- 檢測這個方向的暢通距離
+        local ray = Workspace:Raycast(hrp.Position, testDirection * values.evadeRange * 2, params)
+        local clearDistance = ray and (ray.Position - hrp.Position).Magnitude or (values.evadeRange * 2)
+        
+        -- 計算綜合評分（優先級調整）
+        local score = clearDistance  -- 基礎分：暢通距離
+        
+        -- 新優先級：左後/右後 > 正後方 > 側面
+        if dotProduct < -0.7 and dotProduct > -1 then  -- 左後/右後（約 45-135 度）
+            score = score * 3  -- 3倍加成（最優先）
+        elseif dotProduct <= -0.7 then  -- 正後方（135-180 度）
+            score = score * 2  -- 2倍加成（次優）
+        elseif dotProduct < 0 then  -- 側面偏後
+            score = score * 1.5  -- 1.5倍加成
+        else  -- 側面偏前（0 到 0.5 之間）
+            score = score * 1.1  -- 小幅加成
+        end
+        
+        -- 更新最佳方向
+        if score > maxScore then
+            maxScore = score
+            bestDirection = testDirection
+        end
+    end
+    
+    -- 如果沒找到好方向（理論上不應該發生），使用背離方向
+    if maxScore <= 0 then
+        bestDirection = awayDirection
+    end
+    
+    -- 直線衝刺逃離
+    local rushTime = 1.5
+    local rushSteps = math.ceil(rushTime / 0.03)
+    
+    for i = 1, rushSteps do
+        if not isEvading or not toggles.autoEvade then break end
+        
+        bodyVelocity.Velocity = bestDirection * values.evadeSpeed * 1.2
+        
+        local lookDirection = bestDirection * Vector3.new(1, 0, 1)
+        if lookDirection.Magnitude > 0 then
+            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+        end
+        
+        task.wait(0.03)
+    end
+    
+    bodyVelocity:Destroy()
+    humanoid.AutoRotate = true
+end
+
+-- 檢測路徑是否有障礙物
+local function checkPathClear(startPos, endPos, char)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    local direction = (endPos - startPos)
+    local distance = direction.Magnitude
+    
+    if distance == 0 then return true end
+    
+    local ray = Workspace:Raycast(startPos, direction, params)
+    return ray == nil or (ray.Position - startPos).Magnitude > distance * 0.9
+end
+
+-- 尋找最佳反繞半徑
+local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
+    local baseRadius = values.evadeRange
+    local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
+    
+    for _, radius in ipairs(radiusOptions) do
+        local directionToKiller = (killerPos - startPos).Unit
+        local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
+        
+        -- 測試半圓路徑的幾個點
+        local testsPassed = true
+        local startAngle = goLeft and 0 or math.pi
+        local endAngle = goLeft and math.pi or math.pi * 2
+        
+        for testAngle = startAngle, endAngle, (endAngle - startAngle) / 5 do
+            local offset = Vector3.new(
+                math.cos(testAngle) * radius,
+                0,
+                math.sin(testAngle) * radius
+            )
+            local centerPos = startPos - directionToKiller * radius
+            local testPoint = centerPos + offset
+            
+            if not checkPathClear(startPos, testPoint, char) then
+                testsPassed = false
+                break
+            end
+        end
+        
+        if testsPassed then
+            return radius
+        end
+    end
+    
+    return baseRadius * 0.5  -- 如果都不行，使用最小半徑
+end
+
+-- 執行反繞動作
+local function performEvade()
+    local char = player.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
+    
+    local killer, distance = findNearestKiller()
+    if not killer or distance > values.evadeRange then return end
+    
+    -- 檢查殺手與玩家之間是否有障礙物（有障礙物就不反繞）
+    local killerHRP = killer:FindFirstChild("HumanoidRootPart")
+    if not killerHRP then return end
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char, killer}
+    
+    local directionToKiller = killerHRP.Position - hrp.Position
+    local rayResult = Workspace:Raycast(hrp.Position, directionToKiller, params)
+    
+    -- 如果射線打到障礙物，說明殺手與玩家之間有遮擋，不觸發反繞
+    if rayResult then
+        return
+    end
+    
+    -- 檢查冷卻時間
+    local currentTime = tick()
+    if currentTime - lastEvadeTime < evadeCooldown then return end
+    
+    isEvading = true
+    lastEvadeTime = currentTime
+    
+    -- 保存原始設定
+    local originalWalkSpeed = humanoid.WalkSpeed
+    local originalAutoRotate = humanoid.AutoRotate
+    
+    -- 尋找最佳半徑
+    local evadeRadius = findBestEvadeRadius(hrp.Position, killerHRP.Position, true, char)
+    
+    -- 選擇最佳路徑模式（4種半圓路徑）
+    local bestPathMode = chooseBestPath(hrp.Position, killerHRP.Position, evadeRadius, char)
+    
+    -- 如果所有路徑都被阻擋（被逼到角落），使用應急策略
+    if not bestPathMode then
+        -- 解除 ShiftLock
+        disableShiftLock()
+        
+        task.spawn(function()
+            emergencyEvade(hrp, killerHRP, humanoid, char)
+            
+            -- 恢復控制
+            if toggles.speed then
+                humanoid.WalkSpeed = values.speed
+            else
+                humanoid.WalkSpeed = originalSpeed
+            end
+            
+            isEvading = false
+        end)
+        return
+    end
+    
+    -- 解除 ShiftLock（反繞時）
+    disableShiftLock()
+    
+    local startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+    
+    task.spawn(function()
+        -- 設定反繞速度（使用 BodyVelocity 確保固定速度）
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+        bodyVelocity.P = 10000
+        bodyVelocity.Parent = hrp
+        
+        -- 禁用 Humanoid 移動
+        humanoid.AutoRotate = false
+        
+        -- 撞牆檢測變數
+        local stuckCheckInterval = 0.15  -- 每0.15秒檢查一次
+        local lastCheckTime = tick()
+        local lastPosition = hrp.Position
+        local stuckThreshold = 1  -- 移動距離小於1單位視為卡住
+        local consecutiveStuckCount = 0
+        local maxStuckCount = 3  -- 連續3次卡住就切換路徑
+        
+        -- 執行半圓移動
+        local totalTime = (math.pi * evadeRadius) / values.evadeSpeed  -- 計算半圓時間
+        local steps = math.ceil(totalTime / 0.03)  -- 每步 0.03 秒
+        local stepAngle = (endAngle - startAngle) / steps
+        
+        for i = 1, steps do
+            if not isEvading or not toggles.autoEvade then break end
+            
+            -- 定期檢測是否卡住
+            local currentTime = tick()
+            if currentTime - lastCheckTime >= stuckCheckInterval then
+                local distanceMoved = (hrp.Position - lastPosition).Magnitude
+                
+                if distanceMoved < stuckThreshold then
+                    consecutiveStuckCount = consecutiveStuckCount + 1
+                    
+                    -- 如果連續多次卡住，嘗試切換路徑
+                    if consecutiveStuckCount >= maxStuckCount then
+                        print("⚠️ 檢測到撞牆，嘗試切換路徑...")
+                        
+                        -- 標記當前路徑為不可用
+                        local excludePath = bestPathMode
+                        
+                        -- 重新評估其他路徑
+                        local newBestMode = bestPathMode
+                        local newBestScore = -999
+                        
+                        for mode = 1, 4 do
+                            if mode ~= excludePath then
+                                local score = evaluatePath(mode, hrp.Position, killerHRP.Position, evadeRadius, char)
+                                if score > newBestScore then
+                                    newBestScore = score
+                                    newBestMode = mode
+                                end
+                            end
+                        end
+                        
+                        -- 切換到新路徑
+                        if newBestMode ~= bestPathMode then
+                            bestPathMode = newBestMode
+                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            
+                            -- 重新計算步數，從當前位置開始
+                            local remainingAngle = endAngle - startAngle
+                            steps = math.ceil((remainingAngle * evadeRadius / values.evadeSpeed) / 0.03)
+                            stepAngle = remainingAngle / steps
+                            i = 0  -- 重置計數器
+                            
+                            print("✅ 已切換到新路徑模式: " .. newBestMode)
+                        else
+                            -- 如果沒有更好的路徑，嘗試減小半徑
+                            evadeRadius = evadeRadius * 0.7
+                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            steps = math.ceil((math.pi * evadeRadius / values.evadeSpeed) / 0.03)
+                            stepAngle = (endAngle - startAngle) / steps
+                            i = 0
+                            
+                            print("📉 縮小反繞半徑至: " .. evadeRadius)
+                        end
+                        
+                        consecutiveStuckCount = 0
+                    end
+                else
+                    consecutiveStuckCount = 0  -- 成功移動，重置計數器
+                end
+                
+                lastPosition = hrp.Position
+                lastCheckTime = currentTime
+            end
+            
+            local angle = startAngle + stepAngle * i
+            local nextAngle = startAngle + stepAngle * (i + 1)
+            
+            -- 計算當前和下一個位置
+            local currentOffset = Vector3.new(
+                math.cos(angle) * evadeRadius,
+                0,
+                math.sin(angle) * evadeRadius
+            )
+            local nextOffset = Vector3.new(
+                math.cos(nextAngle) * evadeRadius,
+                0,
+                math.sin(nextAngle) * evadeRadius
+            )
+            
+            local currentPoint = centerPos + currentOffset
+            local nextPoint = centerPos + nextOffset
+            
+            -- 計算移動方向和速度
+            local moveDirection = (nextPoint - currentPoint).Unit
+            bodyVelocity.Velocity = moveDirection * values.evadeSpeed
+            
+            -- 讓角色面向移動方向
+            local lookDirection = moveDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        -- 反繞完成後繼續前進
+        local finalDirection = (hrp.Position - killerHRP.Position).Unit
+        local forwardDistance = evadeRadius
+        local forwardTime = forwardDistance / values.evadeSpeed
+        local forwardSteps = math.ceil(forwardTime / 0.03)
+        
+        for i = 1, forwardSteps do
+            if not isEvading or not toggles.autoEvade then break end
+            
+            -- 繼續往前衝
+            bodyVelocity.Velocity = finalDirection * values.evadeSpeed
+            
+            -- 保持面向前方
+            local lookDirection = finalDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        -- 清理並恢復控制
+        bodyVelocity:Destroy()
+        humanoid.AutoRotate = originalAutoRotate
+        
+        if toggles.speed then
+            humanoid.WalkSpeed = values.speed
+        else
+            humanoid.WalkSpeed = originalSpeed
+        end
+        
+        isEvading = false
+    end)
+end
+
+-- ====================
+-- 防反繞系統（殺手模式）
+-- ====================
+
+-- 尋找最近的其他玩家
+local function findNearestPlayer()
+    local char = player.Character
+    if not char then return nil, math.huge end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, math.huge end
+    
+    local nearestPlayer = nil
+    local minDistance = math.huge
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer ~= player and otherPlayer.Character then
+            local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if otherHRP then
+                local distance = (hrp.Position - otherHRP.Position).Magnitude
+                if distance < minDistance then
+                    minDistance = distance
+                    nearestPlayer = otherPlayer
+                end
+            end
+        end
+    end
+    
+    return nearestPlayer, minDistance
+end
+
+-- 執行防反繞動作（殺手追擊玩家）
+local function performCounterEvade()
+    print("🔪 [防反繞] 開始執行殺手追擊...")
+    print("   模式：", toggles.counterEvadeMode == "disguise" and "偽裝模式" or "全開模式")
+    
+    local char = player.Character
+    if not char then 
+        print("❌ [防反繞] 找不到角色")
+        return 
+    end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then 
+        print("❌ [防反繞] 找不到 HRP 或 Humanoid")
+        return 
+    end
+    
+    local targetPlayer, distance = findNearestPlayer()
+    if not targetPlayer then 
+        print("❌ [防反繞] 找不到目標玩家")
+        return 
+    end
+    if distance > values.evadeRange then 
+        print("❌ [防反繞] 目標距離過遠：", distance, "> ", values.evadeRange)
+        return 
+    end
+    
+    print("✅ [防反繞] 找到目標：", targetPlayer.Name, "距離：", distance)
+    
+    -- 檢查冷卻時間
+    -- 偽裝模式：1秒冷卻
+    -- 全開模式：無冷卻
+    local currentTime = tick()
+    if toggles.counterEvadeMode == "disguise" then
+        if currentTime - lastCounterEvadeTime < 5 then 
+            print("⏱️ [偽裝模式] 冷卻中...")
+            return 
+        end
+    end
+    -- 全開模式不檢查冷卻
+    
+    isCounterEvading = true
+    lastCounterEvadeTime = currentTime
+    
+    print("🏃 [防反繞] 開始追擊！")
+    
+    -- 解除 ShiftLock
+    disableShiftLock()
+    
+    -- 保存原始速度
+    local originalWalkSpeed = humanoid.WalkSpeed
+    local wasSpeedActive = toggles.speed
+    
+    -- 如果速度功能開啟，先關閉它
+    if toggles.speed then
+        toggles.speed = false
+        if connections.speed then connections.speed:Disconnect() end
+        humanoid.WalkSpeed = originalSpeed
+    end
+    
+    task.spawn(function()
+        local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+        if not targetHRP then
+            print("❌ [防反繞] 找不到目標的 HRP")
+            isCounterEvading = false
+            return
+        end
+        
+        -- 使用 BodyVelocity 控制移動
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+        bodyVelocity.P = 10000
+        bodyVelocity.Parent = hrp
+        
+        humanoid.AutoRotate = false
+        
+        print("⚡ [防反繞] BodyVelocity 已創建，開始移動（速度：", values.evadeSpeed, "）")
+        
+        -- 在 1 秒內持續移動到目標
+        -- local duration = 1
+        local duration = toggles.counterEvadeMode == "disguise" and 3 or 1
+        local steps = math.ceil(duration / 0.03)
+
+        -- 偽裝模式:監控速度是否被設為小於5
+        local isDisguiseMode = toggles.counterEvadeMode == "disguise"
+        
+        for i = 1, steps do
+            if not isCounterEvading or not toggles.autoEvade then
+                print("⚠️ [防反繞] 提前中斷")
+                break
+            end
+            
+            -- 偽裝模式:檢查速度是否小於5
+            if isDisguiseMode and humanoid.WalkSpeed < 5 then
+                print("⚠️ [偽裝模式] 檢測到速度小於 5,進入冷卻")
+                lastCounterEvadeTime = tick()  -- 立即進入冷卻(5秒)
+                break
+            end
+
+            
+            -- 更新目標位置
+            targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if not targetHRP then 
+                print("❌ [防反繞] 目標消失")
+                break 
+            end
+            
+            -- 計算方向
+            local direction = (targetHRP.Position - hrp.Position).Unit
+            bodyVelocity.Velocity = direction * values.evadeSpeed
+            
+            -- 面向目標
+            local lookDirection = direction * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        print("✅ [防反繞] 追擊完成！")
+        
+        -- 清理
+        bodyVelocity:Destroy()
+        humanoid.AutoRotate = true
+        
+        -- 恢復速度設置
+        if wasSpeedActive then
+            toggles.speed = true
+            applySpeed()
+        else
+            humanoid.WalkSpeed = originalSpeed
+        end
+        
+        -- 啟用 ShiftLock
+        task.wait(0.1)
+        enableShiftLock()
+        
+        isCounterEvading = false
+    end)
+end
+
+-- 自動反繞監控
+local function startAutoEvade()
+    if connections.autoEvade then connections.autoEvade:Disconnect() end
+    
+    if toggles.autoEvade then
+        -- 緩存身份檢測結果，每2秒更新一次
+        local cachedIsKiller = false
+        local lastIdentityCheck = 0
+        
+        connections.autoEvade = RunService.Heartbeat:Connect(function()
+            -- 每2秒更新一次身份
+            local currentTime = tick()
+            if currentTime - lastIdentityCheck > 2 then
+                cachedIsKiller = isPlayerKiller()
+                lastIdentityCheck = currentTime
+            end
+            
+            if not isEvading and not isCounterEvading then
+                if cachedIsKiller then
+                    performCounterEvade()
+                else
+                    performEvade()
+                end
+            end
+        end)
+    end
+end
+
+-- ====================
+-- ESP 顯示系統
+-- ====================
+
+-- 創建 ESP 高亮框
+local function createESPBox(part, color)
+    -- 創建 BoxHandleAdornment
+    local box = Instance.new("BoxHandleAdornment")
+    box.Name = "ESPBox"
+    box.Adornee = part
+    box.Size = part.Size
+    box.Color3 = color
+    box.AlwaysOnTop = true
+    box.ZIndex = 10
+    box.Transparency = 0.7
+    box.Parent = part
+    
+    -- 創建 BillboardGui 顯示距離
+    local billboard = Instance.new("BillboardGui")
+    billboard.Name = "ESPLabel"
+    billboard.Adornee = part
+    billboard.Size = UDim2.new(0, 100, 0, 40)
+    billboard.StudsOffset = Vector3.new(0, 2, 0)
+    billboard.AlwaysOnTop = true
+    billboard.Parent = part
+    
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, 0, 1, 0)
+    label.BackgroundTransparency = 1
+    label.TextColor3 = color
+    label.TextStrokeTransparency = 0.5
+    label.TextSize = 14
+    label.Font = Enum.Font.GothamBold
+    label.Parent = billboard
+    
+    -- 更新距離顯示
+    local updateConnection
+    updateConnection = RunService.RenderStepped:Connect(function()
+        if not part or not part.Parent then
+            updateConnection:Disconnect()
+            return
+        end
+        
+        local char = player.Character
+        if char then
+            local hrp = char:FindFirstChild("HumanoidRootPart")
+            if hrp then
+                local distance = (part.Position - hrp.Position).Magnitude
+                label.Text = string.format("%.1fm", distance)
+            end
+        end
+    end)
+    
+    return box, billboard, updateConnection
+end
+
+-- 清除指定類型的 ESP
+local function clearESP(espType)
+    for _, espData in pairs(espObjects[espType]) do
+        if espData.box then espData.box:Destroy() end
+        if espData.billboard then espData.billboard:Destroy() end
+        if espData.connection then espData.connection:Disconnect() end
+    end
+    espObjects[espType] = {}
+end
+
+-- 檢查物品路徑是否包含 itemroot（不區分大小寫）
+local function isItemInPath(obj)
+    local current = obj
+    while current do
+        if current.Name:lower() == "itemroot" then
+            return true
+        end
+        current = current.Parent
+    end
+    return false
+end
+
+-- 檢查發電機是否符合條件（路徑包含Main且有Prompt，但排除FakeGenerator）
+local function isValidGenerator(obj)
+    -- 檢查路徑是否包含 Main
+    local hasMain = false
+    local mainObject = nil
+    local current = obj
+    while current do
+        if current.Name == "Main" then
+            hasMain = true
+            mainObject = current
+            break
+        end
+        current = current.Parent
+    end
+    
+    if not hasMain or not mainObject then return false end
+    
+    -- 檢查 Main 的 Parent 是否為 FakeGenerator（排除假發電機）
+    if mainObject.Parent and mainObject.Parent.Name == "FakeGenerator" then
+        return false
+    end
+    
+    -- 檢查是否有 Prompt
+    local hasPrompt = false
+    for _, child in pairs(obj:GetDescendants()) do
+        if child:IsA("ProximityPrompt") then
+            hasPrompt = true
+            break
+        end
+    end
+    
+    return hasPrompt
+end
+
+-- 發電機 ESP
+local function updateGeneratorESP()
+    clearESP("generators")
+    
+    if not toggles.generatorESP then return end
+    
+    -- 遍歷整個 Workspace，尋找符合條件的發電機
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and isValidGenerator(obj) then
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(0, 255, 0))
+            table.insert(espObjects.generators, {
+                part = obj,
+                box = box,
+                billboard = billboard,
+                connection = connection
+            })
+        end
+    end
+end
+
+-- 物品 ESP
+local function updateItemESP()
+    clearESP("items")
+    
+    if not toggles.itemESP then return end
+    
+    -- 遍歷整個 Workspace，尋找路徑包含 itemroot 的物品
+    for _, obj in pairs(Workspace:GetDescendants()) do
+        if obj:IsA("BasePart") and isItemInPath(obj) then
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(255, 255, 0))
+            table.insert(espObjects.items, {
+                part = obj,
+                box = box,
+                billboard = billboard,
+                connection = connection
+            })
+        end
+    end
+end
+
+-- 監控新生成的物品和發電機
+local function startItemMonitoring()
+    if connections.itemESP then connections.itemESP:Disconnect() end
+    
+    if toggles.itemESP then
+        connections.itemESP = Workspace.DescendantAdded:Connect(function(descendant)
+            if descendant:IsA("BasePart") and isItemInPath(descendant) then
+                task.wait(0.1)
+                if toggles.itemESP then
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(255, 255, 0))
+                    table.insert(espObjects.items, {
+                        part = descendant,
+                        box = box,
+                        billboard = billboard,
+                        connection = connection
+                    })
+                end
+            end
+        end)
+    end
+end
+
+-- 監控新生成的發電機
+local function startGeneratorMonitoring()
+    if connections.generatorESP then connections.generatorESP:Disconnect() end
+    
+    if toggles.generatorESP then
+        connections.generatorESP = Workspace.DescendantAdded:Connect(function(descendant)
+            if descendant:IsA("BasePart") then
+                task.wait(0.1)  -- 等待完全加載
+                if toggles.generatorESP and isValidGenerator(descendant) then
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(0, 255, 0))
+                    table.insert(espObjects.generators, {
+                        part = descendant,
+                        box = box,
+                        billboard = billboard,
+                        connection = connection
+                    })
+                end
+            end
+        end)
+    end
+end
+
+-- 重生監聽
+player.CharacterAdded:Connect(function(newChar)
+    task.wait(0.5)
+    if toggles.speed then applySpeed(newChar) end
+    lastEvadeTime = 0
+    isEvading = false
+end)
+
+-- ====================
+-- UI 建構
+-- ====================
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SpeedJumpController"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Global
+screenGui.DisplayOrder = 10001
+
+local function parentUI(g)
+    local success = pcall(function()
+        if gethui then g.Parent = gethui()
+        elseif CoreGui then g.Parent = CoreGui
+        else g.Parent = playerGui end
+    end)
+    if not success then g.Parent = playerGui end
+end
+parentUI(screenGui)
+
+-- 主視窗
+local mainFrame = Instance.new("Frame")
+mainFrame.Size = UDim2.new(0, 260, 0, 262)
+mainFrame.Position = UDim2.new(0.5, -130, 0.5, -131)
+mainFrame.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+Instance.new("UICorner", mainFrame).CornerRadius = UDim.new(0, 10)
+
+-- 標題欄
+local titleBar = Instance.new("Frame")
+titleBar.Size = UDim2.new(1, 0, 0, 32)
+titleBar.BackgroundColor3 = Color3.fromRGB(102, 126, 234)
+titleBar.Parent = mainFrame
+Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
+
+local title = Instance.new("TextLabel")
+title.Size = UDim2.new(1, -60, 1, 0)
+title.BackgroundTransparency = 1
+title.Text = "貓玲的forsaken控制器"
+title.TextSize = 14
+title.Font = Enum.Font.GothamBold
+title.TextColor3 = Color3.fromRGB(255, 255, 255)
+title.Parent = titleBar
+
+local minimizeButton = Instance.new("TextButton")
+minimizeButton.Size = UDim2.new(0, 24, 0, 24)
+minimizeButton.Position = UDim2.new(1, -54, 0, 4)
+minimizeButton.BackgroundColor3 = Color3.fromRGB(158, 158, 158)
+minimizeButton.Text = "─"
+minimizeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+minimizeButton.Parent = titleBar
+Instance.new("UICorner", minimizeButton).CornerRadius = UDim.new(0, 5)
+
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 24, 0, 24)
+closeButton.Position = UDim2.new(1, -28, 0, 4)
+closeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Parent = titleBar
+Instance.new("UICorner", closeButton).CornerRadius = UDim.new(0, 5)
+
+-- 分頁系統
+local tabBar = Instance.new("Frame")
+tabBar.Size = UDim2.new(0.9, 0, 0, 28)
+tabBar.Position = UDim2.new(0.05, 0, 0, 38)
+tabBar.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
+tabBar.Parent = mainFrame
+Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 6)
+
+local function createTab(text, index)
+    local tab = Instance.new("TextButton")
+    tab.Size = UDim2.new(0.33, -4, 1, -4)
+    tab.Position = UDim2.new((index-1) * 0.33, 2, 0, 2)
+    tab.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+    tab.Text = text
+    tab.TextSize = 12
+    tab.Font = Enum.Font.GothamBold
+    tab.TextColor3 = Color3.fromRGB(100, 100, 100)
+    tab.Parent = tabBar
+    Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 4)
+    return tab
+end
+
+local tab1 = createTab("基本設置", 1)
+local tab2 = createTab("自動反繞", 2)
+local tab3 = createTab("其他", 3)
+
+local contentContainer = Instance.new("Frame")
+contentContainer.Size = UDim2.new(0.9, 0, 0, 150) 
+contentContainer.Position = UDim2.new(0.05, 0, 0, 72)
+contentContainer.BackgroundTransparency = 1
+contentContainer.Parent = mainFrame
+contentContainer.ClipsDescendants = true 
+
+local function createScrollingPage(parent)
+    local page = Instance.new("ScrollingFrame")
+    page.Size = UDim2.new(1, 0, 1, 0)
+    page.BackgroundTransparency = 1
+    page.BorderSizePixel = 0
+    page.ScrollBarThickness = 4
+    page.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    page.Visible = false
+    page.Parent = parent
+    local layout = Instance.new("UIListLayout")
+    layout.Padding = UDim.new(0, 6)
+    layout.SortOrder = Enum.SortOrder.LayoutOrder
+    layout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    layout.Parent = page
+    local padding = Instance.new("UIPadding")
+    padding.PaddingRight = UDim.new(0, 6)
+    padding.Parent = page
+    return page
+end
+
+local page1 = createScrollingPage(contentContainer)
+local page2 = createScrollingPage(contentContainer)
+local page3 = createScrollingPage(contentContainer)
+page1.Visible = true
+
+local function switchTab(pageNum)
+    page1.Visible = (pageNum == 1)
+    page2.Visible = (pageNum == 2)
+    page3.Visible = (pageNum == 3)
+    tab1.BackgroundColor3 = (pageNum == 1) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
+    tab1.TextColor3 = (pageNum == 1) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
+    tab2.BackgroundColor3 = (pageNum == 2) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
+    tab2.TextColor3 = (pageNum == 2) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
+    tab3.BackgroundColor3 = (pageNum == 3) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
+    tab3.TextColor3 = (pageNum == 3) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
+end
+tab1.MouseButton1Click:Connect(function() switchTab(1) end)
+tab2.MouseButton1Click:Connect(function() switchTab(2) end)
+tab3.MouseButton1Click:Connect(function() switchTab(3) end)
+
+-- 通用UI創建函數
+local function createControlRow(parent, labelText, placeholder, defaultVal, isInput, order)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 32)
+    frame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
+    frame.LayoutOrder = order or 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 75, 1, 0)
+    label.Position = UDim2.new(0, 6, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextSize = 12
+    label.Font = Enum.Font.GothamBold
+    label.TextColor3 = Color3.fromRGB(85, 85, 85)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+
+    local input
+    if isInput then
+        input = Instance.new("TextBox")
+        input.Size = UDim2.new(0, 65, 0, 22)
+        input.Position = UDim2.new(0, 80, 0, 5)
+        input.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        input.BorderSizePixel = 1; input.BorderColor3 = Color3.fromRGB(221,221,221)
+        input.Text = defaultVal
+        input.PlaceholderText = placeholder
+        input.TextSize = 13
+        input.Font = Enum.Font.Gotham
+        input.TextColor3 = Color3.fromRGB(50, 50, 50)
+        input.Parent = frame
+        Instance.new("UICorner", input).CornerRadius = UDim.new(0, 5)
+    else
+        input = Instance.new("TextLabel")
+        input.Size = UDim2.new(0, 65, 0, 22)
+        input.Position = UDim2.new(0, 80, 0, 5)
+        input.BackgroundTransparency = 1
+        input.Text = "關閉"
+        input.TextSize = 13
+        input.Font = Enum.Font.Gotham
+        input.TextColor3 = Color3.fromRGB(150, 150, 150)
+        input.Parent = frame
+    end
+
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0, 50, 0, 22)
+    btn.Position = UDim2.new(1, -55, 0, 5)
+    btn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+    btn.Text = "啟動"
+    btn.TextSize = 12
+    btn.Font = Enum.Font.GothamBold
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Parent = frame
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 5)
+
+    return frame, input, btn
+end
+
+-- 創建無按鈕的輸入行（用於反繞參數）
+local function createInputOnlyRow(parent, labelText, defaultVal, order)
+    local frame = Instance.new("Frame")
+    frame.Size = UDim2.new(1, 0, 0, 32)
+    frame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
+    frame.LayoutOrder = order or 0
+    frame.Parent = parent
+    Instance.new("UICorner", frame).CornerRadius = UDim.new(0, 6)
+
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(0, 120, 1, 0)
+    label.Position = UDim2.new(0, 6, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = labelText
+    label.TextSize = 12
+    label.Font = Enum.Font.GothamBold
+    label.TextColor3 = Color3.fromRGB(85, 85, 85)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = frame
+
+    local input = Instance.new("TextBox")
+    input.Size = UDim2.new(0, 100, 0, 22)
+    input.Position = UDim2.new(1, -105, 0, 5)
+    input.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+    input.BorderSizePixel = 1
+    input.BorderColor3 = Color3.fromRGB(221, 221, 221)
+    input.Text = defaultVal
+    input.TextSize = 13
+    input.Font = Enum.Font.Gotham
+    input.TextColor3 = Color3.fromRGB(50, 50, 50)
+    input.Parent = frame
+    Instance.new("UICorner", input).CornerRadius = UDim.new(0, 5)
+
+    return frame, input
+end
+
+-- 頁面 1 - 基本設置
+local speedFrame, speedInput, speedButton = createControlRow(page1, "速度:", "34", "34", true, 1)
+local fullbrightFrame, fullbrightInput, fullbrightButton = createControlRow(page1, "全亮:", "1", "1", true, 2)
+local cameraDistFrame, cameraDistInput, cameraDistButton = createControlRow(page1, "鏡頭距離:", "80", "80", true, 3)
+local nofogFrame, nofogStatus, nofogButton = createControlRow(page1, "除霧:", "", "", false, 4)
+local noFilterFrame, noFilterStatus, noFilterButton = createControlRow(page1, "無濾鏡:", "", "", false, 5)
+
+-- 頁面 2 - 自動反繞
+local evadeFrame, evadeStatus, evadeButton = createControlRow(page2, "反繞/防反繞:", "", "", false, 1)
+local evadeRangeFrame, evadeRangeInput = createInputOnlyRow(page2, "反繞範圍:", "15", 2)
+local evadeSpeedFrame, evadeSpeedInput = createInputOnlyRow(page2, "反繞速度:", "30", 3)
+
+-- 添加模式指示標籤
+local evadeModeLabel = Instance.new("TextLabel")
+evadeModeLabel.Size = UDim2.new(1, 0, 0, 20)
+evadeModeLabel.Position = UDim2.new(0, 0, 0, 0)
+evadeModeLabel.BackgroundTransparency = 1
+evadeModeLabel.Text = "當前模式：反繞模式"
+evadeModeLabel.TextSize = 10
+evadeModeLabel.Font = Enum.Font.GothamBold
+evadeModeLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+evadeModeLabel.LayoutOrder = 4
+evadeModeLabel.Parent = page2
+
+-- 添加防反繞模式選擇（僅殺手可見）
+local counterModeFrame = Instance.new("Frame")
+counterModeFrame.Size = UDim2.new(1, 0, 0, 35)
+counterModeFrame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
+counterModeFrame.BorderSizePixel = 0
+counterModeFrame.LayoutOrder = 5
+counterModeFrame.Visible = false  -- 預設隱藏
+counterModeFrame.Parent = page2
+Instance.new("UICorner", counterModeFrame).CornerRadius = UDim.new(0, 6)
+
+local counterModeLabel = Instance.new("TextLabel")
+counterModeLabel.Size = UDim2.new(0.35, 0, 1, 0)
+counterModeLabel.Position = UDim2.new(0, 8, 0, 0)
+counterModeLabel.BackgroundTransparency = 1
+counterModeLabel.Text = "防反繞模式:"
+counterModeLabel.TextSize = 12
+counterModeLabel.Font = Enum.Font.GothamMedium
+counterModeLabel.TextColor3 = Color3.fromRGB(33, 33, 33)
+counterModeLabel.TextXAlignment = Enum.TextXAlignment.Left
+counterModeLabel.Parent = counterModeFrame
+
+local counterModeButton = Instance.new("TextButton")
+counterModeButton.Size = UDim2.new(0.3, 0, 0, 26)
+counterModeButton.Position = UDim2.new(0.68, 0, 0.5, -13)
+counterModeButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+counterModeButton.Text = "偽裝"
+counterModeButton.TextSize = 11
+counterModeButton.Font = Enum.Font.GothamBold
+counterModeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+counterModeButton.Parent = counterModeFrame
+Instance.new("UICorner", counterModeButton).CornerRadius = UDim.new(0, 5)
+
+local counterModeStatus = Instance.new("TextLabel")
+counterModeStatus.Size = UDim2.new(0.25, 0, 1, 0)
+counterModeStatus.Position = UDim2.new(0.38, 0, 0, 0)
+counterModeStatus.BackgroundTransparency = 1
+counterModeStatus.Text = "偽裝"
+counterModeStatus.TextSize = 11
+counterModeStatus.Font = Enum.Font.GothamBold
+counterModeStatus.TextColor3 = Color3.fromRGB(76, 175, 80)
+counterModeStatus.Parent = counterModeFrame
+
+-- 頁面 3 - 其他
+local generatorESPFrame, generatorESPStatus, generatorESPButton = createControlRow(page3, "發電機顯示:", "", "", false, 1)
+local itemESPFrame, itemESPStatus, itemESPButton = createControlRow(page3, "物品顯示:", "", "", false, 2)
+local autoInvisFrame, autoInvisStatus, autoInvisButton = createControlRow(page3, "隱形(可能掉虛空):", "", "", false, 3)
+
+local statusLabel = Instance.new("TextLabel")
+statusLabel.Size = UDim2.new(0.9, 0, 0, 26)
+statusLabel.Position = UDim2.new(0.05, 0, 1, -32)
+statusLabel.BackgroundColor3 = Color3.fromRGB(255, 235, 238)
+statusLabel.Text = "系統就緒"
+statusLabel.TextSize = 11
+statusLabel.Font = Enum.Font.GothamBold
+statusLabel.TextColor3 = Color3.fromRGB(198, 40, 40)
+statusLabel.Parent = mainFrame
+Instance.new("UICorner", statusLabel).CornerRadius = UDim.new(0, 5)
+
+-- ====================
+-- 功能實作
+-- ====================
+
+local function updateStatus()
+    local active = {}
+    if toggles.speed then table.insert(active, "速度") end
+    if toggles.fullbright then table.insert(active, "全亮") end
+    if toggles.autoEvade then table.insert(active, "反繞") end
+    
+    if #active > 0 then
+        statusLabel.Text = "✅ " .. table.concat(active, " | ")
+        statusLabel.BackgroundColor3 = Color3.fromRGB(232, 245, 233)
+        statusLabel.TextColor3 = Color3.fromRGB(46, 125, 50)
+    else
+        statusLabel.Text = "系統就緒"
+        statusLabel.BackgroundColor3 = Color3.fromRGB(255, 235, 238)
+        statusLabel.TextColor3 = Color3.fromRGB(198, 40, 40)
+    end
+end
+
+local function toggleUIState(btn, frame, input, isActive)
+    if isActive then
+        btn.Text = "解除"; btn.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
+        frame.BackgroundColor3 = Color3.fromRGB(227, 242, 253)
+        if input and input:IsA("TextBox") then input.TextEditable = false end
+    else
+        btn.Text = "啟動"; btn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        frame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
+        if input and input:IsA("TextBox") then input.TextEditable = true end
+    end
+    updateStatus()
+end
+
+-- 速度
+speedButton.MouseButton1Click:Connect(function()
+    toggles.speed = not toggles.speed
+    if toggles.speed then
+        if not hasOriginalValues then getOriginalValues() end
+        values.speed = tonumber(speedInput.Text) or 34
+        applySpeed()
+    else
+        applySpeed()
+    end
+    toggleUIState(speedButton, speedFrame, speedInput, toggles.speed)
+end)
+
+-- 全亮
+fullbrightButton.MouseButton1Click:Connect(function()
+    toggles.fullbright = not toggles.fullbright
+    if toggles.fullbright then
+        local val = tonumber(fullbrightInput.Text) or 1
+        values.fullbright = math.clamp(val, 0, 99)
+        if val ~= values.fullbright then fullbrightInput.Text = tostring(values.fullbright) end
+    end
+    updateLighting()
+    toggleUIState(fullbrightButton, fullbrightFrame, fullbrightInput, toggles.fullbright)
+end)
+
+-- 無濾鏡
+noFilterButton.MouseButton1Click:Connect(function()
+    toggles.noFilter = not toggles.noFilter
+    if toggles.noFilter then
+        noFilterStatus.Text = "開啟"
+        noFilterStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+        if connections.noFilter then connections.noFilter:Disconnect() end
+        connections.noFilter = RunService.RenderStepped:Connect(function()
+            for _, v in pairs(Lighting:GetChildren()) do
+                if v:IsA("PostEffect") then v:Destroy() end
+            end
+            if Workspace.CurrentCamera then
+                 for _, v in pairs(Workspace.CurrentCamera:GetChildren()) do
+                    if v:IsA("PostEffect") then v:Destroy() end
+                end
+            end
+        end)
+    else
+        noFilterStatus.Text = "關閉"
+        noFilterStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        if connections.noFilter then connections.noFilter:Disconnect() end
+    end
+    toggleUIState(noFilterButton, noFilterFrame, noFilterStatus, toggles.noFilter)
+end)
+
+-- 除霧
+nofogButton.MouseButton1Click:Connect(function()
+    toggles.nofog = not toggles.nofog
+    if toggles.nofog then
+        nofogStatus.Text = "開啟"; nofogStatus.TextColor3 = Color3.fromRGB(46,125,50)
+        if connections.nofog then connections.nofog:Disconnect() end
+        connections.nofog = RunService.RenderStepped:Connect(function()
+            Lighting.FogEnd = 100000
+            for _, v in pairs(Lighting:GetDescendants()) do
+                if v:IsA("Atmosphere") then v.Density = 0; v.Offset = 0 end
+            end
+        end)
+    else
+        nofogStatus.Text = "關閉"; nofogStatus.TextColor3 = Color3.fromRGB(150,150,150)
+        if connections.nofog then connections.nofog:Disconnect() end
+        Lighting.FogEnd = trueLightingBackup.FogEnd or 1000
+    end
+    toggleUIState(nofogButton, nofogFrame, nofogStatus, toggles.nofog)
+end)
+
+-- 鏡頭距離
+cameraDistButton.MouseButton1Click:Connect(function()
+    toggles.cameraDist = not toggles.cameraDist
+    if toggles.cameraDist then
+        values.cameraDist = tonumber(cameraDistInput.Text) or 80
+        player.CameraMaxZoomDistance = values.cameraDist
+        player.CameraMinZoomDistance = values.cameraDist
+        if player.Character then
+            local hum = player.Character:FindFirstChildOfClass("Humanoid")
+            if hum then hum.CameraOffset = Vector3.new(0,0,0) end
+        end
+        task.delay(0.1, function()
+            if toggles.cameraDist then player.CameraMinZoomDistance = 0.5 end
+        end)
+    else
+        player.CameraMaxZoomDistance = 128
+        player.CameraMinZoomDistance = 0.5
+    end
+    toggleUIState(cameraDistButton, cameraDistFrame, cameraDistInput, toggles.cameraDist)
+end)
+
+-- 自動反繞/防反繞
+evadeButton.MouseButton1Click:Connect(function()
+    toggles.autoEvade = not toggles.autoEvade
+    if toggles.autoEvade then
+        values.evadeRange = tonumber(evadeRangeInput.Text) or 15
+        values.evadeSpeed = tonumber(evadeSpeedInput.Text) or 30
+        
+        -- 檢測並顯示當前身份
+        local isKiller = isPlayerKiller()
+        print("🔍 當前身份檢測：", isKiller and "殺手" or "倖存者")
+        
+        startAutoEvade()
+        evadeStatus.Text = "開啟"
+        evadeStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+        
+        -- 更新模式顯示
+        if isKiller then
+            evadeModeLabel.Text = "當前模式：防反繞模式（殺手）"
+            evadeModeLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+            counterModeFrame.Visible = true  -- 顯示模式選擇
+        else
+            evadeModeLabel.Text = "當前模式：反繞模式（逃生者）"
+            evadeModeLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+            counterModeFrame.Visible = false  -- 隱藏模式選擇
+        end
+    else
+        if connections.autoEvade then connections.autoEvade:Disconnect() end
+        evadeStatus.Text = "關閉"
+        evadeStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        evadeModeLabel.Text = "當前模式：未啟用"
+        evadeModeLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+        counterModeFrame.Visible = false  -- 關閉時隱藏
+    end
+    toggleUIState(evadeButton, evadeFrame, evadeStatus, toggles.autoEvade)
+end)
+
+-- 防反繞模式切換按鈕
+counterModeButton.MouseButton1Click:Connect(function()
+    if toggles.counterEvadeMode == "disguise" then
+        toggles.counterEvadeMode = "fullpower"
+        counterModeButton.Text = "全開"
+        counterModeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)  -- 紅色
+        counterModeStatus.Text = "全開"
+        counterModeStatus.TextColor3 = Color3.fromRGB(244, 67, 54)
+        print("🔄 切換到全開模式")
+    else
+        toggles.counterEvadeMode = "disguise"
+        counterModeButton.Text = "偽裝"
+        counterModeButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)  -- 綠色
+        counterModeStatus.Text = "偽裝"
+        counterModeStatus.TextColor3 = Color3.fromRGB(76, 175, 80)
+        print("🔄 切換到偽裝模式")
+    end
+end)
+
+-- 定期更新模式顯示
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if toggles.autoEvade then
+            local isKiller = isPlayerKiller()
+            if isKiller then
+                evadeModeLabel.Text = "當前模式：防反繞模式（殺手）"
+                evadeModeLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
+                counterModeFrame.Visible = true
+            else
+                evadeModeLabel.Text = "當前模式：反繞模式（逃生者）"
+                evadeModeLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
+                counterModeFrame.Visible = false
+            end
+        end
+    end
+end)
+
+-- 更新反繞參數
+evadeRangeInput.FocusLost:Connect(function()
+    values.evadeRange = tonumber(evadeRangeInput.Text) or 15
+    evadeRangeInput.Text = tostring(values.evadeRange)
+end)
+
+evadeSpeedInput.FocusLost:Connect(function()
+    values.evadeSpeed = tonumber(evadeSpeedInput.Text) or 30
+    evadeSpeedInput.Text = tostring(values.evadeSpeed)
+end)
+
+-- 發電機顯示
+generatorESPButton.MouseButton1Click:Connect(function()
+    toggles.generatorESP = not toggles.generatorESP
+    if toggles.generatorESP then
+        generatorESPStatus.Text = "開啟"
+        generatorESPStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+        updateGeneratorESP()
+        startGeneratorMonitoring()
+    else
+        generatorESPStatus.Text = "關閉"
+        generatorESPStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        clearESP("generators")
+        if connections.generatorESP then connections.generatorESP:Disconnect() end
+    end
+    toggleUIState(generatorESPButton, generatorESPFrame, generatorESPStatus, toggles.generatorESP)
+end)
+
+-- 物品顯示
+itemESPButton.MouseButton1Click:Connect(function()
+    toggles.itemESP = not toggles.itemESP
+    if toggles.itemESP then
+        itemESPStatus.Text = "開啟"
+        itemESPStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+        updateItemESP()
+        startItemMonitoring()
+    else
+        itemESPStatus.Text = "關閉"
+        itemESPStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        clearESP("items")
+        if connections.itemESP then connections.itemESP:Disconnect() end
+    end
+    toggleUIState(itemESPButton, itemESPFrame, itemESPStatus, toggles.itemESP)
+end)
+
+-- ====================
+-- 自動隱形系統（原始腳本完整版）
+-- ====================
+
+-- 自動隱形專用變數（獨立於主系統）
+local autoInvisToggles = {
+    autoEvade = false
+}
+
+local autoInvisValues = {
+    evadeRange = 15,
+    evadeSpeed = 30
+}
+
+local autoInvisConnections = {
+    autoEvade = nil
+}
+
+local isAutoInvisEvading = false
+local lastAutoInvisEvadeTime = 0
+local autoInvisEvadeCooldown = 1.5
+
+-- 尋找最近的玩家（包括自己）
+local function findNearestPlayerForInvis()
+    local char = player.Character
+    if not char then return nil, math.huge end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, math.huge end
+    
+    local nearestPlayer = nil
+    local minDistance = math.huge
+    
+    -- 遍歷所有玩家（包括自己）
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer.Character then
+            local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if otherHRP then
+                local distance = (hrp.Position - otherHRP.Position).Magnitude
+                if distance < minDistance then
+                    minDistance = distance
+                    nearestPlayer = otherPlayer
+                end
+            end
+        end
+    end
+    
+    return nearestPlayer, minDistance
+end
+
+-- 4種半圓路徑模式
+local EVADE_PATHS = {
+    LEFT_FORWARD = 1,
+    LEFT_BACK = 2,
+    RIGHT_FORWARD = 3,
+    RIGHT_BACK = 4
+}
+
+-- 計算指定路徑模式的半圓參數
+local function getPathParameters(mode, hrpPos, targetPos, radius)
+    local directionToTarget = (targetPos - hrpPos).Unit
+    local perpendicular = Vector3.new(-directionToTarget.Z, 0, directionToTarget.X)
+    
+    local startAngle, endAngle, centerPos
+    
+    if mode == EVADE_PATHS.LEFT_FORWARD then
+        startAngle = 0
+        endAngle = math.pi
+        centerPos = hrpPos - directionToTarget * radius
+        
+    elseif mode == EVADE_PATHS.LEFT_BACK then
+        startAngle = math.pi / 2
+        endAngle = math.pi * 1.5
+        centerPos = hrpPos + perpendicular * radius
+        
+    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
+        startAngle = math.pi
+        endAngle = math.pi * 2
+        centerPos = hrpPos - directionToTarget * radius
+        
+    elseif mode == EVADE_PATHS.RIGHT_BACK then
+        startAngle = math.pi
+        endAngle = math.pi * 2
+        centerPos = hrpPos - perpendicular * radius
+    end
+    
+    return startAngle, endAngle, centerPos
+end
+
+-- 評估路徑的安全性
+local function evaluatePath(mode, hrpPos, targetPos, radius, char)
+    local startAngle, endAngle, centerPos = getPathParameters(mode, hrpPos, targetPos, radius)
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    local testPoints = 8
+    local clearPoints = 0
+    local totalDistance = 0
+    local hasBlockedPath = false
+    
+    for i = 0, testPoints do
+        local t = i / testPoints
+        local angle = startAngle + (endAngle - startAngle) * t
+        local offset = Vector3.new(
+            math.cos(angle) * radius,
+            0,
+            math.sin(angle) * radius
+        )
+        local testPoint = centerPos + offset
+        
+        local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
+        if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
+            clearPoints = clearPoints + 1
+        else
+            if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
+                hasBlockedPath = true
+            end
+        end
+        
+        if i == testPoints then
+            totalDistance = (testPoint - targetPos).Magnitude
+        end
+    end
+    
+    if hasBlockedPath then
+        clearPoints = clearPoints * 0.3
+    end
+    
+    local score = clearPoints + (totalDistance / 10)
+    
+    -- 優先往後方繞
+    if mode == EVADE_PATHS.LEFT_BACK or mode == EVADE_PATHS.RIGHT_BACK then
+        score = score + 100
+    elseif mode == EVADE_PATHS.LEFT_FORWARD or mode == EVADE_PATHS.RIGHT_FORWARD then
+        score = score + 20
+    end
+    
+    return score, clearPoints, hasBlockedPath
+end
+
+-- 選擇最佳逃離路徑
+local function chooseBestPath(hrpPos, targetPos, radius, char)
+    local bestMode = EVADE_PATHS.LEFT_FORWARD
+    local bestScore = -1
+    local allPathsBlocked = true
+    
+    for mode = 1, 4 do
+        local score, clearPoints, blocked = evaluatePath(mode, hrpPos, targetPos, radius, char)
+        if clearPoints > 4 then
+            allPathsBlocked = false
+        end
+        
+        if score > bestScore then
+            bestScore = score
+            bestMode = mode
+        end
+    end
+    
+    if allPathsBlocked then
+        return nil
+    end
+    
+    return bestMode
+end
+
+-- 應急逃離策略
+local function emergencyEvade(hrp, targetHRP, humanoid, char)
+    local bodyVelocity = Instance.new("BodyVelocity")
+    bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+    bodyVelocity.P = 10000
+    bodyVelocity.Parent = hrp
+    
+    humanoid.AutoRotate = false
+    
+    local toTargetDirection = (targetHRP.Position - hrp.Position).Unit
+    local awayDirection = -toTargetDirection
+    local bestDirection = awayDirection
+    local maxScore = -math.huge
+    
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do
+        local testDirection = Vector3.new(
+            math.cos(angle),
+            0,
+            math.sin(angle)
+        )
+        
+        local dotProduct = testDirection:Dot(toTargetDirection)
+        
+        if dotProduct > 0.5 then
+            continue
+        end
+        
+        local ray = Workspace:Raycast(hrp.Position, testDirection * autoInvisValues.evadeRange * 2, params)
+        local clearDistance = ray and (ray.Position - hrp.Position).Magnitude or (autoInvisValues.evadeRange * 2)
+        
+        local score = clearDistance
+        
+        if dotProduct < -0.7 and dotProduct > -1 then
+            score = score * 3
+        elseif dotProduct <= -0.7 then
+            score = score * 2
+        elseif dotProduct < 0 then
+            score = score * 1.5
+        else
+            score = score * 1.1
+        end
+        
+        if score > maxScore then
+            maxScore = score
+            bestDirection = testDirection
+        end
+    end
+    
+    if maxScore <= 0 then
+        bestDirection = awayDirection
+    end
+    
+    local rushTime = 1.5
+    local rushSteps = math.ceil(rushTime / 0.03)
+    
+    for i = 1, rushSteps do
+        if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
+        
+        bodyVelocity.Velocity = bestDirection * autoInvisValues.evadeSpeed * 1.2
+        
+        local lookDirection = bestDirection * Vector3.new(1, 0, 1)
+        if lookDirection.Magnitude > 0 then
+            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+        end
+        
+        task.wait(0.03)
+    end
+    
+    bodyVelocity:Destroy()
+    humanoid.AutoRotate = true
+end
+
+-- 檢測路徑是否暢通
+local function checkPathClear(startPos, endPos, char)
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char}
+    
+    local direction = (endPos - startPos)
+    local distance = direction.Magnitude
+    
+    if distance == 0 then return true end
+    
+    local ray = Workspace:Raycast(startPos, direction, params)
+    return ray == nil or (ray.Position - startPos).Magnitude > distance * 0.9
+end
+
+-- 尋找最佳反繞半徑
+local function findBestEvadeRadius(startPos, targetPos, char)
+    local baseRadius = autoInvisValues.evadeRange
+    local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
+    
+    for _, radius in ipairs(radiusOptions) do
+        local directionToTarget = (targetPos - startPos).Unit
+        
+        local testsPassed = true
+        local startAngle = 0
+        local endAngle = math.pi
+        
+        for testAngle = startAngle, endAngle, (endAngle - startAngle) / 5 do
+            local offset = Vector3.new(
+                math.cos(testAngle) * radius,
+                0,
+                math.sin(testAngle) * radius
+            )
+            local centerPos = startPos - directionToTarget * radius
+            local testPoint = centerPos + offset
+            
+            if not checkPathClear(startPos, testPoint, char) then
+                testsPassed = false
+                break
+            end
+        end
+        
+        if testsPassed then
+            return radius
+        end
+    end
+    
+    return baseRadius * 0.5
+end
+
+-- 執行反繞動作
+local function performAutoInvisEvade()
+    local char = player.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
+    
+    local targetPlayer, distance = findNearestPlayerForInvis()
+    if not targetPlayer or distance > autoInvisValues.evadeRange then return end
+    
+    local targetChar = targetPlayer.Character
+    if not targetChar then return end
+    
+    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then return end
+    
+    -- 檢查是否有障礙物阻擋
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char, targetChar}
+    
+    local directionToTarget = targetHRP.Position - hrp.Position
+    local rayResult = Workspace:Raycast(hrp.Position, directionToTarget, params)
+    
+    if rayResult then
+        return
+    end
+    
+    -- 檢查冷卻時間
+    local currentTime = tick()
+    if currentTime - lastAutoInvisEvadeTime < autoInvisEvadeCooldown then return end
+    
+    isAutoInvisEvading = true
+    lastAutoInvisEvadeTime = currentTime
+    
+    local originalAutoRotate = humanoid.AutoRotate
+    
+    local evadeRadius = findBestEvadeRadius(hrp.Position, targetHRP.Position, char)
+    local bestPathMode = chooseBestPath(hrp.Position, targetHRP.Position, evadeRadius, char)
+    
+    -- 如果所有路徑都被阻擋，使用應急策略
+    if not bestPathMode then
+        task.spawn(function()
+            emergencyEvade(hrp, targetHRP, humanoid, char)
+            isAutoInvisEvading = false
+        end)
+        return
+    end
+    
+    local startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
+    
+    task.spawn(function()
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+        bodyVelocity.P = 10000
+        bodyVelocity.Parent = hrp
+        
+        humanoid.AutoRotate = false
+        
+        -- 撞牆檢測變數
+        local stuckCheckInterval = 0.15
+        local lastCheckTime = tick()
+        local lastPosition = hrp.Position
+        local stuckThreshold = 1
+        local consecutiveStuckCount = 0
+        local maxStuckCount = 3
+        
+        local totalTime = (math.pi * evadeRadius) / autoInvisValues.evadeSpeed
+        local steps = math.ceil(totalTime / 0.03)
+        local stepAngle = (endAngle - startAngle) / steps
+        
+        for i = 1, steps do
+            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
+            
+            -- 檢測是否卡住
+            local currentTime = tick()
+            if currentTime - lastCheckTime >= stuckCheckInterval then
+                local distanceMoved = (hrp.Position - lastPosition).Magnitude
+                
+                if distanceMoved < stuckThreshold then
+                    consecutiveStuckCount = consecutiveStuckCount + 1
+                    
+                    if consecutiveStuckCount >= maxStuckCount then
+                        -- 切換路徑
+                        local excludePath = bestPathMode
+                        local newBestMode = bestPathMode
+                        local newBestScore = -999
+                        
+                        for mode = 1, 4 do
+                            if mode ~= excludePath then
+                                local score = evaluatePath(mode, hrp.Position, targetHRP.Position, evadeRadius, char)
+                                if score > newBestScore then
+                                    newBestScore = score
+                                    newBestMode = mode
+                                end
+                            end
+                        end
+                        
+                        if newBestMode ~= bestPathMode then
+                            bestPathMode = newBestMode
+                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
+                            
+                            local remainingAngle = endAngle - startAngle
+                            steps = math.ceil((remainingAngle * evadeRadius / autoInvisValues.evadeSpeed) / 0.03)
+                            stepAngle = remainingAngle / steps
+                            i = 0
+                        else
+                            evadeRadius = evadeRadius * 0.7
+                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
+                            steps = math.ceil((math.pi * evadeRadius / autoInvisValues.evadeSpeed) / 0.03)
+                            stepAngle = (endAngle - startAngle) / steps
+                            i = 0
+                        end
+                        
+                        consecutiveStuckCount = 0
+                    end
+                else
+                    consecutiveStuckCount = 0
+                end
+                
+                lastPosition = hrp.Position
+                lastCheckTime = currentTime
+            end
+            
+            local angle = startAngle + stepAngle * i
+            local nextAngle = startAngle + stepAngle * (i + 1)
+            
+            local currentOffset = Vector3.new(
+                math.cos(angle) * evadeRadius,
+                0,
+                math.sin(angle) * evadeRadius
+            )
+            local nextOffset = Vector3.new(
+                math.cos(nextAngle) * evadeRadius,
+                0,
+                math.sin(nextAngle) * evadeRadius
+            )
+            
+            local currentPoint = centerPos + currentOffset
+            local nextPoint = centerPos + nextOffset
+            
+            local moveDirection = (nextPoint - currentPoint).Unit
+            bodyVelocity.Velocity = moveDirection * autoInvisValues.evadeSpeed
+            
+            local lookDirection = moveDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        -- 反繞完成後繼續前進
+        local finalDirection = (hrp.Position - targetHRP.Position).Unit
+        local forwardDistance = evadeRadius
+        local forwardTime = forwardDistance / autoInvisValues.evadeSpeed
+        local forwardSteps = math.ceil(forwardTime / 0.03)
+        
+        for i = 1, forwardSteps do
+            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
+            
+            bodyVelocity.Velocity = finalDirection * autoInvisValues.evadeSpeed
+            
+            local lookDirection = finalDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        bodyVelocity:Destroy()
+        humanoid.AutoRotate = originalAutoRotate
+        isAutoInvisEvading = false
+    end)
+end
+
+-- 自動反繞監控
+local function startAutoInvisible()
+    if autoInvisConnections.autoEvade then autoInvisConnections.autoEvade:Disconnect() end
+    
+    if autoInvisToggles.autoEvade then
+        autoInvisConnections.autoEvade = RunService.Heartbeat:Connect(function()
+            if not isAutoInvisEvading then
+                performAutoInvisEvade()
+            end
+        end)
+    end
+end
+
+-- 隱形按鈕
+autoInvisButton.MouseButton1Click:Connect(function()
+    toggles.autoInvisible = not toggles.autoInvisible
+    autoInvisToggles.autoEvade = toggles.autoInvisible
+    
+    if toggles.autoInvisible then
+        startAutoInvisible()
+        autoInvisStatus.Text = "開啟"
+        autoInvisStatus.TextColor3 = Color3.fromRGB(138, 43, 226)
+        print("👻 自動隱形已啟動")
+    else
+        if autoInvisConnections.autoEvade then autoInvisConnections.autoEvade:Disconnect() end
+        autoInvisStatus.Text = "關閉"
+        autoInvisStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        print("🔆 自動隱形已關閉")
+    end
+    toggleUIState(autoInvisButton, autoInvisFrame, autoInvisStatus, toggles.autoInvisible)
+end)
+
+-- 自動啟用功能
+task.spawn(function()
+    task.wait(1)
+    
+    -- 自動啟用全亮
+    toggles.fullbright = true
+    updateLighting()
+    toggleUIState(fullbrightButton, fullbrightFrame, fullbrightInput, true)
+    
+    -- 自動啟用鏡頭距離
+    toggles.cameraDist = true
+    player.CameraMaxZoomDistance = values.cameraDist
+    player.CameraMinZoomDistance = values.cameraDist
+    task.delay(0.1, function()
+        if toggles.cameraDist then player.CameraMinZoomDistance = 0.5 end
+    end)
+    toggleUIState(cameraDistButton, cameraDistFrame, cameraDistInput, true)
+    
+    -- 自動啟用除霧
+    toggles.nofog = true
+    if connections.nofog then connections.nofog:Disconnect() end
+    connections.nofog = RunService.RenderStepped:Connect(function()
+        Lighting.FogEnd = 100000
+        for _, v in pairs(Lighting:GetDescendants()) do
+            if v:IsA("Atmosphere") then v.Density = 0; v.Offset = 0 end
+        end
+    end)
+    nofogStatus.Text = "開啟"
+    nofogStatus.TextColor3 = Color3.fromRGB(46,125,50)
+    toggleUIState(nofogButton, nofogFrame, nofogStatus, true)
+    
+    -- 自動啟用無濾鏡
+    toggles.noFilter = true
+    if connections.noFilter then connections.noFilter:Disconnect() end
+    connections.noFilter = RunService.RenderStepped:Connect(function()
+        for _, v in pairs(Lighting:GetChildren()) do
+            if v:IsA("PostEffect") then v:Destroy() end
+        end
+        if Workspace.CurrentCamera then
+             for _, v in pairs(Workspace.CurrentCamera:GetChildren()) do
+                if v:IsA("PostEffect") then v:Destroy() end
+            end
+        end
+    end)
+    noFilterStatus.Text = "開啟"
+    noFilterStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+    toggleUIState(noFilterButton, noFilterFrame, noFilterStatus, true)
+end)
+
+-- 拖曳功能
+local function enableDrag(frame, dragHandle)
+    local dragging = false
+    local dragInput, dragStart, startPos
+
+    local function update(input)
+        local delta = input.Position - dragStart
+        frame.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+    end
+
+    dragHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+            dragging = true
+            dragStart = input.Position
+            startPos = frame.Position
+            
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then
+                    dragging = false
+                end
+            end)
+        end
+    end)
+
+    dragHandle.InputChanged:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch then
+            dragInput = input
+        end
+    end)
+
+    UserInputService.InputChanged:Connect(function(input)
+        if input == dragInput and dragging then
+            update(input)
+        end
+    end)
+end
+
+enableDrag(mainFrame, titleBar)
+
+-- 最小化UI
+local miniFrame = Instance.new("Frame"); miniFrame.Size=UDim2.new(0,130,0,32); miniFrame.Position=UDim2.new(0.5,-65,0,30); miniFrame.BackgroundColor3=Color3.fromRGB(102,126,234); miniFrame.Visible=false; miniFrame.Parent=screenGui; Instance.new("UICorner", miniFrame).CornerRadius=UDim.new(0,6)
+local miniTitle = Instance.new("TextLabel"); miniTitle.Text="🎮 控制器"; miniTitle.Size=UDim2.new(1,-36,1,0); miniTitle.BackgroundTransparency=1; miniTitle.Font=Enum.Font.GothamBold; miniTitle.TextSize=16; miniTitle.TextColor3=Color3.fromRGB(255,255,255); miniTitle.Parent=miniFrame
+local expandButton = Instance.new("TextButton"); expandButton.Text="+"; expandButton.Size=UDim2.new(0,24,0,24); expandButton.Position=UDim2.new(1,-28,0,4); expandButton.BackgroundColor3=Color3.fromRGB(76,175,80); expandButton.TextColor3=Color3.fromRGB(255,255,255); expandButton.Parent=miniFrame; Instance.new("UICorner", expandButton).CornerRadius=UDim.new(0,5)
+enableDrag(miniFrame, miniFrame)
+
+minimizeButton.MouseButton1Click:Connect(function() mainFrame.Visible=false; miniFrame.Visible=true end)
+expandButton.MouseButton1Click:Connect(function() miniFrame.Visible=false; mainFrame.Visible=true end)
+
+-- 關閉按鈕
+closeButton.MouseButton1Click:Connect(function()
+    screenGui:Destroy()
+    for _, v in pairs(connections) do if v then v:Disconnect() end end
+    
+    -- 清理所有 ESP
+    clearESP("generators")
+    clearESP("items")
+    
+    Lighting.Ambient = trueLightingBackup.Ambient
+    Lighting.Brightness = trueLightingBackup.Brightness
+    Lighting.OutdoorAmbient = trueLightingBackup.OutdoorAmbient
+    Lighting.ColorShift_Top = trueLightingBackup.ColorShift_Top
+    Lighting.ColorShift_Bottom = trueLightingBackup.ColorShift_Bottom
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then
+            hum.WalkSpeed = originalSpeed
+        end
+    end
+end)
+
+-- 初始化
+task.spawn(function()
+    if player.Character then task.wait(0.1); getOriginalValues() end
+end)
+
+print("🎮 貓玲的控制器 v3.0 已載入！自動反繞系統就緒。")
+
+-- ====================
+-- ShiftLock + ESP UI 整合
+-- ====================
+task.spawn(function()
+    pcall(function()
+        local ref = cloneref or function(x) return x end
+        local S = function(n) return ref(game:GetService(n)) end
+
+        local Plrs, Tw, UIS, RS, Wk, CG =
+            S("Players"), S("TweenService"), S("UserInputService"), S("RunService"), S("Workspace"), S("CoreGui")
+
+        local plr = Plrs.LocalPlayer
+
+        local function parentShiftUI(g)
+            if gethui then
+                g.Name = "\0" .. g.Name
+                g.Parent = gethui()
+                return g
+            elseif CG then
+                g.Parent = CG
+                return g
+            else
+                g.Parent = plr:WaitForChild("PlayerGui")
+                return g
+            end
+        end
+
+        local function getParts()
+            local c = plr.Character or plr.CharacterAdded:Wait()
+            local hum = c:FindFirstChildOfClass("Humanoid") or c:WaitForChild("Humanoid")
+            local hrp = c:FindFirstChild("HumanoidRootPart") or c:WaitForChild("HumanoidRootPart")
+            return c, hum, hrp
+        end
+
+        shiftLockUI = Instance.new("ScreenGui")
+        shiftLockUI.Name = "ShiftLockUI"
+        shiftLockUI.ResetOnSpawn = false
+        shiftLockUI.IgnoreGuiInset = true
+        parentShiftUI(shiftLockUI)
+
+        -- 主按鈕
+        local btn = Instance.new("ImageButton")
+        btn.Name = "LockBtn"; btn.AnchorPoint = Vector2.new(0.5, 0.5); btn.Size = UDim2.fromOffset(64, 64)
+        btn.Position = UDim2.new(1, -30, 1, -30); btn.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
+        btn.AutoButtonColor = false; btn.Parent = shiftLockUI
+        local cr = Instance.new("UICorner"); cr.CornerRadius = UDim.new(1, 0); cr.Parent = btn
+        local strk = Instance.new("UIStroke"); strk.Thickness = 2; strk.Color = Color3.fromRGB(0, 140, 255); strk.Parent = btn
+        local icn = Instance.new("ImageLabel")
+        icn.Name = "Icn"; icn.BackgroundTransparency = 1; icn.AnchorPoint = Vector2.new(0.5, 0.5)
+        icn.Position = UDim2.fromScale(0.5, 0.5); icn.Size = UDim2.fromScale(0.62, 0.62)
+        icn.Image = "rbxasset://textures/ui/mouseLock_off.png"; icn.Parent = btn
+
+        -- 專用拖曳把手
+        local dragHandle = Instance.new("Frame")
+        dragHandle.Name = "DragHandle"
+        dragHandle.AnchorPoint = Vector2.new(0.5, 1)
+        dragHandle.Position = UDim2.new(0.5, 0, 0, -2)
+        dragHandle.Size = UDim2.fromOffset(40, 6)
+        dragHandle.BackgroundColor3 = Color3.fromRGB(100, 100, 110)
+        dragHandle.BorderSizePixel = 0
+        dragHandle.Parent = btn
+        
+        local handleCorner = Instance.new("UICorner")
+        handleCorner.CornerRadius = UDim.new(1, 0)
+        handleCorner.Parent = dragHandle
+        
+        -- 拖曳把手的視覺提示（3個小點）
+        local dot1 = Instance.new("Frame")
+        dot1.Size = UDim2.fromOffset(2, 2)
+        dot1.Position = UDim2.new(0.3, 0, 0.5, -1)
+        dot1.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
+        dot1.BorderSizePixel = 0
+        dot1.Parent = dragHandle
+        Instance.new("UICorner", dot1).CornerRadius = UDim.new(1, 0)
+        
+        local dot2 = dot1:Clone()
+        dot2.Position = UDim2.new(0.5, 0, 0.5, -1)
+        dot2.Parent = dragHandle
+        
+        local dot3 = dot1:Clone()
+        dot3.Position = UDim2.new(0.7, 0, 0.5, -1)
+        dot3.Parent = dragHandle
+
+        -- 關閉按鈕
+        local xBtn = Instance.new("TextButton")
+        xBtn.Name = "Close"; xBtn.AnchorPoint = Vector2.new(1, 0); xBtn.Position = UDim2.new(1, 5, 0, -5)
+        xBtn.Size = UDim2.fromOffset(18, 18); xBtn.BackgroundColor3 = Color3.fromRGB(230, 60, 60); xBtn.Text = "×"
+        xBtn.TextSize = 14; xBtn.TextColor3 = Color3.new(1, 1, 1); xBtn.Parent = btn
+        Instance.new("UICorner").Parent = xBtn
+
+        -- 延伸按鈕（但暫時不創建延伸面板，因為現在只有 ESP 功能）
+        local extBtn = Instance.new("TextButton")
+        extBtn.Name = "ExtendBtn"; extBtn.AnchorPoint = Vector2.new(0.5, 1); extBtn.Position = UDim2.new(0.5, 0, 0, -15)
+        extBtn.Size = UDim2.fromOffset(56, 22); extBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
+        extBtn.Text = "ESP"; extBtn.TextSize = 12
+        extBtn.TextColor3 = Color3.new(1, 1, 1)
+        extBtn.Parent = btn
+        Instance.new("UICorner").Parent = extBtn
+
+        -- ESP 相關
+        local espEnabled = false
+        local espLabels = {}
+        local espBoxes = {}
+        local espConn = nil
+
+        local function cleanupESP(p)
+            if espLabels[p] then
+                if espLabels[p].billboard then espLabels[p].billboard:Destroy() end
+                espLabels[p] = nil
+            end
+            if espBoxes[p] then
+                espBoxes[p]:Destroy()
+                espBoxes[p] = nil
+            end
+        end
+
+        local function createESPBox(character)
+            local box = Instance.new("BoxHandleAdornment")
+            box.Name = "ESPBox"; box.AlwaysOnTop = true; box.ZIndex = 1
+            box.Transparency = 0.7; box.Color3 = Color3.new(1, 1, 1); box.Parent = shiftLockUI
+            return box
+        end
+
+        local function toggleESP()
+            espEnabled = not espEnabled
+            
+            if not espEnabled then
+                if espConn then espConn:Disconnect(); espConn = nil end
+                for p, _ in pairs(espLabels) do cleanupESP(p) end
+                for p, _ in pairs(espBoxes) do cleanupESP(p) end
+            else
+                espConn = RS.RenderStepped:Connect(function()
+                    local _, _, myHRP = getParts()
+                    for _, p in ipairs(Plrs:GetPlayers()) do
+                        if p ~= plr then
+                            local char = p.Character
+                            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                            local hum = char and char:FindFirstChildOfClass("Humanoid")
+                            if char and hrp and hum and hum.Health > 0 then
+                                if not espLabels[p] then
+                                    local bg = Instance.new("BillboardGui")
+                                    bg.Size = UDim2.fromOffset(200, 50); bg.AlwaysOnTop = true
+                                    bg.StudsOffset = Vector3.new(0, 3, 0); bg.Parent = shiftLockUI
+                                    local tl = Instance.new("TextLabel")
+                                    tl.Size = UDim2.fromScale(1, 1); tl.BackgroundTransparency = 1
+                                    tl.TextColor3 = Color3.new(1, 1, 1); tl.TextStrokeTransparency = 0.5
+                                    tl.TextSize = 14; tl.Font = Enum.Font.SourceSansBold; tl.Parent = bg
+                                    espLabels[p] = {billboard = bg, label = tl}
+                                end
+                                if not espBoxes[p] then espBoxes[p] = createESPBox(char) end
+                                local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
+                                local lab = espLabels[p]
+                                lab.billboard.Adornee = hrp
+                                lab.label.Text = string.format("名: %s\n血量: %.0f\n距離: %.1f", p.Name, hum.Health, dist)
+                                local box = espBoxes[p]; box.Adornee = char; box.Size = char:GetExtentsSize()
+                            else cleanupESP(p) end
+                        end
+                    end
+                    for p, _ in pairs(espLabels) do if not Plrs:FindFirstChild(p.Name) then cleanupESP(p) end end
+                end)
+            end
+        end
+
+        -- ESP 按鈕點擊（使用 extBtn 作為 ESP 切換）
+        extBtn.Activated:Connect(function()
+            toggleESP()
+            extBtn.Text = espEnabled and "ESP ✓" or "ESP"
+            extBtn.BackgroundColor3 = espEnabled and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(45, 45, 50)
+        end)
+
+        -- ShiftLock 按鈕點擊
+        btn.Activated:Connect(function()
+            if shiftLockEnabled then
+                disableShiftLock()
+                icn.Image = "rbxasset://textures/ui/mouseLock_off.png"
+                Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(34, 34, 38)}):Play()
+            else
+                enableShiftLock()
+                icn.Image = "rbxasset://textures/ui/mouseLock_on.png"
+                Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(38, 48, 60)}):Play()
+            end
+        end)
+
+        -- 拖曳功能（使用拖曳把手）
+        local dragging, dragInput, dragStart, startPos
+        
+        dragHandle.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+                dragging = true
+                dragStart = input.Position
+                startPos = btn.Position
+                
+                Tw:Create(dragHandle, TweenInfo.new(0.1), {BackgroundColor3 = Color3.fromRGB(150, 150, 160)}):Play()
+                
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then
+                        dragging = false
+                        Tw:Create(dragHandle, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(100, 100, 110)}):Play()
+                    end
+                end)
+            end
+        end)
+        
+        UIS.InputChanged:Connect(function(input)
+            if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+                local delta = input.Position - dragStart
+                btn.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + delta.X, startPos.Y.Scale, startPos.Y.Offset + delta.Y)
+            end
+        end)
+
+        -- 關閉按鈕
+        xBtn.Activated:Connect(function()
+            disableShiftLock()
+            if espConn then espConn:Disconnect() end
+            for p, _ in pairs(espLabels) do cleanupESP(p) end
+            for p, _ in pairs(espBoxes) do cleanupESP(p) end
+            shiftLockUI:Destroy()
+            print("❌ ShiftLock + ESP 系統已關閉")
+        end)
+
+        -- 預設啟動 ESP
+        task.wait(0.5)
+        toggleESP()
+        extBtn.Text = "ESP ✓"
+        extBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+
+        print("✅ ShiftLock + ESP 系統已整合（預設啟動 ESP）")
+    end)
+end)
