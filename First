@@ -1,4 +1,4 @@
--- Roblox 全能控制器 (修改版 v3.0 - 自動反繞系統)
+-- Roblox 全能控制器 (修改版 v1.0 - 自動反繞系統)
 -- 更新：簡化UI，新增智能反繞功能
 
 local CoreGui = game:GetService("CoreGui")
