@@ -1,4 +1,4 @@
--- Roblox 全能控制器 (修改版 v1.0 - 自動反繞系統)
+-- Roblox 全能控制器 (修改版 v1.1 - forsaken專用)
 -- 更新：簡化UI，新增智能反繞功能
 
 local CoreGui = game:GetService("CoreGui")
@@ -2289,6 +2289,22 @@ task.spawn(function()
     noFilterStatus.Text = "開啟"
     noFilterStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
     toggleUIState(noFilterButton, noFilterFrame, noFilterStatus, true)
+
+    -- 自動啟用發電機顯示
+    toggles.generatorESP = true
+    generatorESPStatus.Text = "開啟"
+    generatorESPStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+    updateGeneratorESP()
+    startGeneratorMonitoring()
+    toggleUIState(generatorESPButton, generatorESPFrame, generatorESPStatus, true)
+    
+    -- 自動啟用物品顯示
+    toggles.itemESP = true
+    itemESPStatus.Text = "開啟"
+    itemESPStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+    updateItemESP()
+    startItemMonitoring()
+    toggleUIState(itemESPButton, itemESPFrame, itemESPStatus, true)
 end)
 
 -- 拖曳功能
