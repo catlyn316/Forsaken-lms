@@ -310,7 +310,7 @@ local function findNearestKiller()
 end
 
 -- ==========================================================
--- 重新設計：確保終點在左後/右後方
+-- 修正版本：以殺手面向玩家的方向為基準
 -- ==========================================================
 
 -- 反繞路徑定義
@@ -319,34 +319,36 @@ local EVADE_PATHS = {
     RIGHT_BACK = 2
 }
 
--- 路徑參數計算（重新設計）
+-- 路徑參數計算（以殺手視角為基準）
 local function getPathParameters(mode, hrpPos, killerPos, radius)
-    local directionToKiller = (killerPos - hrpPos).Unit
-    local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
+    -- 殺手指向玩家的方向（殺手的"前方"）
+    local killerToPlayer = (hrpPos - killerPos).Unit
+    -- 殺手視角的左右方向
+    local killerPerpendicular = Vector3.new(-killerToPlayer.Z, 0, killerToPlayer.X)
     
     local startAngle, endAngle, centerPos
     
     if mode == EVADE_PATHS.LEFT_BACK then
-        -- 圓心在玩家正左側
-        centerPos = hrpPos + perpendicular * radius
-        -- 從殺手方向(0度)開始，逆時針轉180度到背向殺手方向(π)
+        -- 圓心在玩家位置，往殺手的左側偏移
+        centerPos = hrpPos + killerPerpendicular * radius
+        -- 從殺手方向開始，逆時針轉180度到殺手後方
         startAngle = 0
         endAngle = math.pi
         
     elseif mode == EVADE_PATHS.RIGHT_BACK then
-        -- 圓心在玩家正右側
-        centerPos = hrpPos - perpendicular * radius
-        -- 從殺手方向(0度)開始，順時針轉180度到背向殺手方向(-π)
+        -- 圓心在玩家位置，往殺手的右側偏移
+        centerPos = hrpPos - killerPerpendicular * radius
+        -- 從殺手方向開始，順時針轉180度到殺手後方
         startAngle = 0
         endAngle = -math.pi
     end
     
-    return startAngle, endAngle, centerPos, directionToKiller, perpendicular
+    return startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular
 end
 
 -- 路徑評估
 local function evaluatePath(mode, hrpPos, killerPos, radius, char)
-    local startAngle, endAngle, centerPos, directionToKiller, perpendicular = getPathParameters(mode, hrpPos, killerPos, radius)
+    local startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(mode, hrpPos, killerPos, radius)
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -362,15 +364,18 @@ local function evaluatePath(mode, hrpPos, killerPos, radius, char)
         local angle = startAngle + (endAngle - startAngle) * t
         
         -- 計算圓周上的點（相對於圓心）
-        local localX = math.cos(angle) * radius
-        local localZ = math.sin(angle) * radius
+        -- angle=0時指向殺手，angle=π時背向殺手
+        local localForward = math.cos(angle) * radius  -- 前後方向（殺手視角）
+        local localSide = math.sin(angle) * radius     -- 左右方向（殺手視角）
         
         -- 轉換到世界座標
         local testPoint
         if mode == EVADE_PATHS.LEFT_BACK then
-            testPoint = centerPos + directionToKiller * localX + perpendicular * localZ
+            -- 左側繞行：圓心在左側，從殺手方向逆時針轉到後方
+            testPoint = centerPos - killerToPlayer * localForward + killerPerpendicular * localSide
         else
-            testPoint = centerPos + directionToKiller * localX - perpendicular * localZ
+            -- 右側繞行：圓心在右側，從殺手方向順時針轉到後方
+            testPoint = centerPos - killerToPlayer * localForward - killerPerpendicular * localSide
         end
         
         local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
@@ -513,21 +518,21 @@ local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
     local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
     
     for _, radius in ipairs(radiusOptions) do
-        local directionToKiller = (killerPos - startPos).Unit
-        local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
+        local killerToPlayer = (startPos - killerPos).Unit
+        local killerPerpendicular = Vector3.new(-killerToPlayer.Z, 0, killerToPlayer.X)
         
         local testsPassed = true
-        local startAngle = goLeft and 0 or math.pi
-        local endAngle = goLeft and math.pi or math.pi * 2
         
-        for testAngle = startAngle, endAngle, (endAngle - startAngle) / 5 do
-            local offset = Vector3.new(
-                math.cos(testAngle) * radius,
-                0,
-                math.sin(testAngle) * radius
-            )
-            local centerPos = startPos - directionToKiller * radius
-            local testPoint = centerPos + offset
+        for angle = 0, math.pi, math.pi / 5 do
+            local localForward = math.cos(angle) * radius
+            local localSide = math.sin(angle) * radius
+            
+            local testPoint
+            if goLeft then
+                testPoint = (startPos + killerPerpendicular * radius) - killerToPlayer * localForward + killerPerpendicular * localSide
+            else
+                testPoint = (startPos - killerPerpendicular * radius) - killerToPlayer * localForward - killerPerpendicular * localSide
+            end
             
             if not checkPathClear(startPos, testPoint, char) then
                 testsPassed = false
@@ -543,7 +548,7 @@ local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
     return baseRadius * 0.5
 end
 
--- 執行反繞動作（核心修正）
+-- 執行反繞動作
 local function performEvade()
     local char = player.Character
     if not char then return end
@@ -601,7 +606,7 @@ local function performEvade()
     
     disableShiftLock()
     
-    local startAngle, endAngle, centerPos, directionToKiller, perpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+    local startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
     
     task.spawn(function()
         local bodyVelocity = Instance.new("BodyVelocity")
@@ -639,7 +644,7 @@ local function performEvade()
                         
                         if score > 0 then
                             bestPathMode = newBestMode
-                            startAngle, endAngle, centerPos, directionToKiller, perpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
                             
                             local remainingAngle = math.abs(endAngle - startAngle)
                             steps = math.ceil((remainingAngle * evadeRadius / values.evadeSpeed) / 0.03)
@@ -647,7 +652,7 @@ local function performEvade()
                             i = 0
                         else
                             evadeRadius = evadeRadius * 0.7
-                            startAngle, endAngle, centerPos, directionToKiller, perpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
                             steps = math.ceil((math.abs(endAngle - startAngle) * evadeRadius / values.evadeSpeed) / 0.03)
                             stepAngle = (endAngle - startAngle) / steps
                             i = 0
@@ -665,28 +670,28 @@ local function performEvade()
             
             local angle = startAngle + stepAngle * i
             
-            -- 計算圓周上的點（使用正確的座標系統）
-            local localX = math.cos(angle) * evadeRadius
-            local localZ = math.sin(angle) * evadeRadius
+            -- 計算圓周上的點（以殺手視角為基準）
+            local localForward = math.cos(angle) * evadeRadius
+            local localSide = math.sin(angle) * evadeRadius
             
             -- 轉換到世界座標
             local currentPoint
             if bestPathMode == EVADE_PATHS.LEFT_BACK then
-                currentPoint = centerPos + directionToKiller * localX + perpendicular * localZ
+                currentPoint = centerPos - killerToPlayer * localForward + killerPerpendicular * localSide
             else
-                currentPoint = centerPos + directionToKiller * localX - perpendicular * localZ
+                currentPoint = centerPos - killerToPlayer * localForward - killerPerpendicular * localSide
             end
             
-            -- 計算下一個點（用於得到移動方向）
+            -- 計算下一個點
             local nextAngle = startAngle + stepAngle * (i + 1)
-            local nextLocalX = math.cos(nextAngle) * evadeRadius
-            local nextLocalZ = math.sin(nextAngle) * evadeRadius
+            local nextLocalForward = math.cos(nextAngle) * evadeRadius
+            local nextLocalSide = math.sin(nextAngle) * evadeRadius
             
             local nextPoint
             if bestPathMode == EVADE_PATHS.LEFT_BACK then
-                nextPoint = centerPos + directionToKiller * nextLocalX + perpendicular * nextLocalZ
+                nextPoint = centerPos - killerToPlayer * nextLocalForward + killerPerpendicular * nextLocalSide
             else
-                nextPoint = centerPos + directionToKiller * nextLocalX - perpendicular * nextLocalZ
+                nextPoint = centerPos - killerToPlayer * nextLocalForward - killerPerpendicular * nextLocalSide
             end
             
             -- 計算移動方向
@@ -702,8 +707,8 @@ local function performEvade()
             task.wait(0.03)
         end
         
-        -- 反繞完成後繼續直走（背離殺手）
-        local finalDirection = -directionToKiller.Unit
+        -- 反繞完成後繼續直走（背離殺手，相對於殺手視角的正後方）
+        local finalDirection = -killerToPlayer
         local forwardDistance = evadeRadius
         local forwardTime = forwardDistance / values.evadeSpeed
         local forwardSteps = math.ceil(forwardTime / 0.03)
