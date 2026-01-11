@@ -785,7 +785,7 @@ local function performEvade()
         
         isEvading = false
     end)
-end
+end)
 
 
 -- ==========================================================
