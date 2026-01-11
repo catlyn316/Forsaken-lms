@@ -1,5 +1,5 @@
--- Roblox 全能控制器 (修改版 v1.1 - forsaken專用)
--- 更新：簡化UI，新增智能反繞功能
+-- Roblox 全能控制器 (修改版 v1.2 - forsaken專用)
+-- 更新：發電機進度顯示
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -981,7 +981,7 @@ end
 -- ====================
 
 -- 創建 ESP 高亮框
-local function createESPBox(part, color)
+local function createESPBox(part, color, itemType)
     -- 創建 BoxHandleAdornment
     local box = Instance.new("BoxHandleAdornment")
     box.Name = "ESPBox"
@@ -993,11 +993,11 @@ local function createESPBox(part, color)
     box.Transparency = 0.7
     box.Parent = part
     
-    -- 創建 BillboardGui 顯示距離
+    -- 創建 BillboardGui 顯示距離和進度
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "ESPLabel"
     billboard.Adornee = part
-    billboard.Size = UDim2.new(0, 100, 0, 40)
+    billboard.Size = UDim2.new(0, 100, 0, 60)  -- 增加高度以容納進度
     billboard.StudsOffset = Vector3.new(0, 2, 0)
     billboard.AlwaysOnTop = true
     billboard.Parent = part
@@ -1011,7 +1011,7 @@ local function createESPBox(part, color)
     label.Font = Enum.Font.GothamBold
     label.Parent = billboard
     
-    -- 更新距離顯示
+    -- 更新距離和進度顯示
     local updateConnection
     updateConnection = RunService.RenderStepped:Connect(function()
         if not part or not part.Parent then
@@ -1024,7 +1024,16 @@ local function createESPBox(part, color)
             local hrp = char:FindFirstChild("HumanoidRootPart")
             if hrp then
                 local distance = (part.Position - hrp.Position).Magnitude
-                label.Text = string.format("%.1fm", distance)
+                
+                -- 如果是發電機，顯示進度
+                if itemType == "generator" then
+                    local mainParent = part.Parent
+                    local progress = mainParent and mainParent:FindFirstChild("Progress")
+                    local progressValue = progress and progress.Value or 0
+                    label.Text = string.format("%.1fm\n進度: %.1f%%", distance, progressValue)
+                else
+                    label.Text = string.format("%.1fm", distance)
+                end
             end
         end
     end)
@@ -1097,7 +1106,7 @@ local function updateGeneratorESP()
     -- 遍歷整個 Workspace，尋找符合條件的發電機
     for _, obj in pairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and isValidGenerator(obj) then
-            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(0, 255, 0))
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(0, 255, 0), "generator")  -- 添加 "generator" 參數
             table.insert(espObjects.generators, {
                 part = obj,
                 box = box,
@@ -1117,7 +1126,7 @@ local function updateItemESP()
     -- 遍歷整個 Workspace，尋找路徑包含 itemroot 的物品
     for _, obj in pairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and isItemInPath(obj) then
-            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(255, 255, 0))
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(255, 255, 0), "item")  -- 添加 "item" 參數
             table.insert(espObjects.items, {
                 part = obj,
                 box = box,
@@ -1137,7 +1146,7 @@ local function startItemMonitoring()
             if descendant:IsA("BasePart") and isItemInPath(descendant) then
                 task.wait(0.1)
                 if toggles.itemESP then
-                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(255, 255, 0))
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(255, 255, 0), "item")  -- 添加 "item" 參數
                     table.insert(espObjects.items, {
                         part = descendant,
                         box = box,
@@ -1159,7 +1168,7 @@ local function startGeneratorMonitoring()
             if descendant:IsA("BasePart") then
                 task.wait(0.1)  -- 等待完全加載
                 if toggles.generatorESP and isValidGenerator(descendant) then
-                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(0, 255, 0))
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(0, 255, 0), "generator")  -- 添加 "generator" 參數
                     table.insert(espObjects.generators, {
                         part = descendant,
                         box = box,
