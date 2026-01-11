@@ -310,16 +310,16 @@ local function findNearestKiller()
 end
 
 -- ==========================================================
--- 修改 1: 反繞路徑定義（只保留左後和右後）
+-- 完整修正版本：確保終點在左後/右後方
 -- ==========================================================
+
+-- 反繞路徑定義（只保留左後和右後）
 local EVADE_PATHS = {
     LEFT_BACK = 1,      -- 左轉半圓，終點在左後方
     RIGHT_BACK = 2      -- 右轉半圓，終點在右後方
 }
 
--- ==========================================================
--- 修改 2: 路徑參數計算（只處理左後與右後）
--- ==========================================================
+-- 路徑參數計算（修正版：確保終點在後方）
 local function getPathParameters(mode, hrpPos, killerPos, radius)
     local directionToKiller = (killerPos - hrpPos).Unit
     local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
@@ -327,26 +327,26 @@ local function getPathParameters(mode, hrpPos, killerPos, radius)
     local startAngle, endAngle, centerPos
     
     if mode == EVADE_PATHS.LEFT_BACK then
-        -- 左轉半圓，終點在左後方
-        startAngle = math.pi / 2
-        endAngle = math.pi * 1.5
+        -- 圓心在玩家左側
         centerPos = hrpPos + perpendicular * radius
+        -- 從正前方(0度)開始，逆時針轉180度到正後方(π)
+        startAngle = 0
+        endAngle = math.pi
         
     elseif mode == EVADE_PATHS.RIGHT_BACK then
-        -- 右轉半圓，終點在右後方
-        startAngle = math.pi
-        endAngle = math.pi * 2
+        -- 圓心在玩家右側
         centerPos = hrpPos - perpendicular * radius
+        -- 從正前方(0度)開始，順時針轉-180度到正後方(-π)
+        startAngle = 0
+        endAngle = -math.pi
     end
     
-    return startAngle, endAngle, centerPos
+    return startAngle, endAngle, centerPos, directionToKiller
 end
 
--- ==========================================================
--- 修改 3: 路徑評估（只評估左後與右後，並給予同等高優先）
--- ==========================================================
+-- 路徑評估（修正版：正確計算終點位置）
 local function evaluatePath(mode, hrpPos, killerPos, radius, char)
-    local startAngle, endAngle, centerPos = getPathParameters(mode, hrpPos, killerPos, radius)
+    local startAngle, endAngle, centerPos, directionToKiller = getPathParameters(mode, hrpPos, killerPos, radius)
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -355,31 +355,49 @@ local function evaluatePath(mode, hrpPos, killerPos, radius, char)
     -- 測試路徑上的多個點
     local testPoints = 8
     local clearPoints = 0
-    local totalDistance = 0
+    local minObstacleDistance = math.huge
     local hasBlockedPath = false
     
     for i = 0, testPoints do
         local t = i / testPoints
         local angle = startAngle + (endAngle - startAngle) * t
+        
+        -- 根據圓心和方向計算測試點
         local offset = Vector3.new(
             math.cos(angle) * radius,
             0,
             math.sin(angle) * radius
         )
-        local testPoint = centerPos + offset
+        
+        -- 旋轉offset使其對齊到實際方向
+        local rotatedOffset
+        if mode == EVADE_PATHS.LEFT_BACK then
+            rotatedOffset = Vector3.new(
+                directionToKiller.X * offset.X - directionToKiller.Z * offset.Z,
+                0,
+                directionToKiller.Z * offset.X + directionToKiller.X * offset.Z
+            )
+        else
+            rotatedOffset = Vector3.new(
+                directionToKiller.X * offset.X + directionToKiller.Z * offset.Z,
+                0,
+                directionToKiller.Z * offset.X - directionToKiller.X * offset.Z
+            )
+        end
+        
+        local testPoint = centerPos + rotatedOffset
         
         -- 檢查這個點是否能安全到達
         local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
         if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
             clearPoints = clearPoints + 1
         else
+            local obstacleDistance = (ray.Position - testPoint).Magnitude
+            minObstacleDistance = math.min(minObstacleDistance, obstacleDistance)
+            
             if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
                 hasBlockedPath = true
             end
-        end
-        
-        if i == testPoints then
-            totalDistance = (testPoint - killerPos).Magnitude
         end
     end
     
@@ -387,26 +405,24 @@ local function evaluatePath(mode, hrpPos, killerPos, radius, char)
         clearPoints = clearPoints * 0.3
     end
     
-    -- 基礎評分：安全點數量 + 終點距離加成
-    local score = clearPoints + (totalDistance / 10)
+    -- 基礎評分：安全點數量 + 距離障礙物的距離
+    local score = clearPoints * 10 + minObstacleDistance
     
-    -- 兩種路徑都是後方繞圓，給予相同的高優先級
+    -- 高優先級加成
     score = score + 100
     
-    return score, clearPoints, hasBlockedPath
+    return score, clearPoints, hasBlockedPath, minObstacleDistance
 end
 
--- ==========================================================
--- 修改 4: 路徑選擇（只在左後與右後之間選擇）
--- ==========================================================
+-- 路徑選擇（修正版：選擇更安全的路徑）
 local function chooseBestPath(hrpPos, killerPos, radius, char)
     local bestMode = EVADE_PATHS.LEFT_BACK
     local bestScore = -1
     local allPathsBlocked = true
     
-    -- 只評估 2 種路徑：左後和右後
+    -- 評估兩種路徑
     for mode = 1, 2 do
-        local score, clearPoints, blocked = evaluatePath(mode, hrpPos, killerPos, radius, char)
+        local score, clearPoints, blocked, minObstacleDistance = evaluatePath(mode, hrpPos, killerPos, radius, char)
         if clearPoints > 4 then
             allPathsBlocked = false
         end
@@ -424,7 +440,7 @@ local function chooseBestPath(hrpPos, killerPos, radius, char)
     return bestMode
 end
 
--- 應急逃離策略：當被逼到角落時使用（智能選擇逃離方向）
+-- 應急逃離策略（與原代碼相同，無需修改）
 local function emergencyEvade(hrp, killerHRP, humanoid, char)
     local bodyVelocity = Instance.new("BodyVelocity")
     bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
@@ -433,11 +449,9 @@ local function emergencyEvade(hrp, killerHRP, humanoid, char)
     
     humanoid.AutoRotate = false
     
-    -- 計算基準方向
     local toKillerDirection = (killerHRP.Position - hrp.Position).Unit
     local awayDirection = -toKillerDirection
     
-    -- 評估所有可能的逃離方向
     local bestDirection = awayDirection
     local maxScore = -math.huge
     
@@ -445,53 +459,44 @@ local function emergencyEvade(hrp, killerHRP, humanoid, char)
     params.FilterType = Enum.RaycastFilterType.Blacklist
     params.FilterDescendantsInstances = {char}
     
-    -- 測試 360 度所有方向，但根據與殺手的角度給予不同評分
-    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do  -- 每 22.5 度測試一次
+    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do
         local testDirection = Vector3.new(
             math.cos(angle),
             0,
             math.sin(angle)
         )
         
-        -- 計算這個方向與殺手的角度關係
         local dotProduct = testDirection:Dot(toKillerDirection)
         
-        -- 如果方向太靠近殺手（正面 120 度範圍內），大幅降低評分
-        if dotProduct > 0.5 then  -- 正面約 60 度範圍
-            continue  -- 跳過這個方向，絕不正面衝向殺手
+        if dotProduct > 0.5 then
+            continue
         end
         
-        -- 檢測這個方向的暢通距離
         local ray = Workspace:Raycast(hrp.Position, testDirection * values.evadeRange * 2, params)
         local clearDistance = ray and (ray.Position - hrp.Position).Magnitude or (values.evadeRange * 2)
         
-        -- 計算綜合評分（優先級調整）
-        local score = clearDistance  -- 基礎分：暢通距離
+        local score = clearDistance
         
-        -- 新優先級：左後/右後 > 正後方 > 側面
-        if dotProduct < -0.7 and dotProduct > -1 then  -- 左後/右後（約 45-135 度）
-            score = score * 3  -- 3倍加成（最優先）
-        elseif dotProduct <= -0.7 then  -- 正後方（135-180 度）
-            score = score * 2  -- 2倍加成（次優）
-        elseif dotProduct < 0 then  -- 側面偏後
-            score = score * 1.5  -- 1.5倍加成
-        else  -- 側面偏前（0 到 0.5 之間）
-            score = score * 1.1  -- 小幅加成
+        if dotProduct < -0.7 and dotProduct > -1 then
+            score = score * 3
+        elseif dotProduct <= -0.7 then
+            score = score * 2
+        elseif dotProduct < 0 then
+            score = score * 1.5
+        else
+            score = score * 1.1
         end
         
-        -- 更新最佳方向
         if score > maxScore then
             maxScore = score
             bestDirection = testDirection
         end
     end
     
-    -- 如果沒找到好方向（理論上不應該發生），使用背離方向
     if maxScore <= 0 then
         bestDirection = awayDirection
     end
     
-    -- 直線衝刺逃離
     local rushTime = 1.5
     local rushSteps = math.ceil(rushTime / 0.03)
     
@@ -512,7 +517,7 @@ local function emergencyEvade(hrp, killerHRP, humanoid, char)
     humanoid.AutoRotate = true
 end
 
--- 檢測路徑是否有障礙物
+-- 檢測路徑是否有障礙物（與原代碼相同）
 local function checkPathClear(startPos, endPos, char)
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -527,7 +532,7 @@ local function checkPathClear(startPos, endPos, char)
     return ray == nil or (ray.Position - startPos).Magnitude > distance * 0.9
 end
 
--- 尋找最佳反繞半徑
+-- 尋找最佳反繞半徑（與原代碼相同）
 local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
     local baseRadius = values.evadeRange
     local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
@@ -536,7 +541,6 @@ local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
         local directionToKiller = (killerPos - startPos).Unit
         local perpendicular = Vector3.new(-directionToKiller.Z, 0, directionToKiller.X)
         
-        -- 測試半圓路徑的幾個點
         local testsPassed = true
         local startAngle = goLeft and 0 or math.pi
         local endAngle = goLeft and math.pi or math.pi * 2
@@ -561,10 +565,10 @@ local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
         end
     end
     
-    return baseRadius * 0.5  -- 如果都不行，使用最小半徑
+    return baseRadius * 0.5
 end
 
--- 執行反繞動作
+-- 執行反繞動作（核心修正版）
 local function performEvade()
     local char = player.Character
     if not char then return end
@@ -576,7 +580,6 @@ local function performEvade()
     local killer, distance = findNearestKiller()
     if not killer or distance > values.evadeRange then return end
     
-    -- 檢查殺手與玩家之間是否有障礙物（有障礙物就不反繞）
     local killerHRP = killer:FindFirstChild("HumanoidRootPart")
     if not killerHRP then return end
     
@@ -587,37 +590,29 @@ local function performEvade()
     local directionToKiller = killerHRP.Position - hrp.Position
     local rayResult = Workspace:Raycast(hrp.Position, directionToKiller, params)
     
-    -- 如果射線打到障礙物，說明殺手與玩家之間有遮擋，不觸發反繞
     if rayResult then
         return
     end
     
-    -- 檢查冷卻時間
     local currentTime = tick()
     if currentTime - lastEvadeTime < evadeCooldown then return end
     
     isEvading = true
     lastEvadeTime = currentTime
     
-    -- 保存原始設定
     local originalWalkSpeed = humanoid.WalkSpeed
     local originalAutoRotate = humanoid.AutoRotate
     
-    -- 尋找最佳半徑
     local evadeRadius = findBestEvadeRadius(hrp.Position, killerHRP.Position, true, char)
     
-    -- 選擇最佳路徑模式（只會在左後/右後選擇）
     local bestPathMode = chooseBestPath(hrp.Position, killerHRP.Position, evadeRadius, char)
     
-    -- 如果所有路徑都被阻擋（被逼到角落），使用應急策略
     if not bestPathMode then
-        -- 解除 ShiftLock
         disableShiftLock()
         
         task.spawn(function()
             emergencyEvade(hrp, killerHRP, humanoid, char)
             
-            -- 恢復控制
             if toggles.speed then
                 humanoid.WalkSpeed = values.speed
             else
@@ -629,38 +624,32 @@ local function performEvade()
         return
     end
     
-    -- 解除 ShiftLock（反繞時）
     disableShiftLock()
     
-    local startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+    local startAngle, endAngle, centerPos, directionToKiller = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
     
     task.spawn(function()
-        -- 設定反繞速度（使用 BodyVelocity 確保固定速度）
         local bodyVelocity = Instance.new("BodyVelocity")
         bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
         bodyVelocity.P = 10000
         bodyVelocity.Parent = hrp
         
-        -- 禁用 Humanoid 移動
         humanoid.AutoRotate = false
         
-        -- 撞牆檢測變數
-        local stuckCheckInterval = 0.15  -- 每0.15秒檢查一次
+        local stuckCheckInterval = 0.15
         local lastCheckTime = tick()
         local lastPosition = hrp.Position
-        local stuckThreshold = 1  -- 移動距離小於1單位視為卡住
+        local stuckThreshold = 1
         local consecutiveStuckCount = 0
-        local maxStuckCount = 3  -- 連續3次卡住就切換路徑
+        local maxStuckCount = 3
         
-        -- 執行半圓移動
-        local totalTime = (math.pi * evadeRadius) / values.evadeSpeed  -- 計算半圓時間
-        local steps = math.ceil(totalTime / 0.03)  -- 每步 0.03 秒
+        local totalTime = (math.abs(endAngle - startAngle) * evadeRadius) / values.evadeSpeed
+        local steps = math.ceil(totalTime / 0.03)
         local stepAngle = (endAngle - startAngle) / steps
         
         for i = 1, steps do
             if not isEvading or not toggles.autoEvade then break end
             
-            -- 定期檢測是否卡住
             local currentTime = tick()
             if currentTime - lastCheckTime >= stuckCheckInterval then
                 local distanceMoved = (hrp.Position - lastPosition).Magnitude
@@ -668,36 +657,27 @@ local function performEvade()
                 if distanceMoved < stuckThreshold then
                     consecutiveStuckCount = consecutiveStuckCount + 1
                     
-                    -- 如果連續多次卡住，嘗試切換路徑
                     if consecutiveStuckCount >= maxStuckCount then
-                        -- ==========================================================
-                        -- 修改 5: 路徑切換邏輯（只在左後 <-> 右後 切換）
-                        -- ==========================================================
                         print("⚠️ 檢測到撞牆，嘗試切換路徑...")
                         
-                        -- 切換到另一條路徑（左後 <-> 右後）
                         local newBestMode = (bestPathMode == EVADE_PATHS.LEFT_BACK) and EVADE_PATHS.RIGHT_BACK or EVADE_PATHS.LEFT_BACK
                         
-                        -- 評估新路徑
                         local score = evaluatePath(newBestMode, hrp.Position, killerHRP.Position, evadeRadius, char)
                         
-                        -- 切換到新路徑
                         if score > 0 then
                             bestPathMode = newBestMode
-                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            startAngle, endAngle, centerPos, directionToKiller = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
                             
-                            -- 重新計算步數，從當前位置開始
-                            local remainingAngle = endAngle - startAngle
+                            local remainingAngle = math.abs(endAngle - startAngle)
                             steps = math.ceil((remainingAngle * evadeRadius / values.evadeSpeed) / 0.03)
-                            stepAngle = remainingAngle / steps
-                            i = 0  -- 重置計數器
+                            stepAngle = (endAngle - startAngle) / steps
+                            i = 0
                             
                             print("✅ 已切換到新路徑模式: " .. newBestMode)
                         else
-                            -- 如果新路徑也不行，嘗試減小半徑
                             evadeRadius = evadeRadius * 0.7
-                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
-                            steps = math.ceil((math.pi * evadeRadius / values.evadeSpeed) / 0.03)
+                            startAngle, endAngle, centerPos, directionToKiller = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
+                            steps = math.ceil((math.abs(endAngle - startAngle) * evadeRadius / values.evadeSpeed) / 0.03)
                             stepAngle = (endAngle - startAngle) / steps
                             i = 0
                             
@@ -707,7 +687,7 @@ local function performEvade()
                         consecutiveStuckCount = 0
                     end
                 else
-                    consecutiveStuckCount = 0  -- 成功移動，重置計數器
+                    consecutiveStuckCount = 0
                 end
                 
                 lastPosition = hrp.Position
@@ -715,28 +695,58 @@ local function performEvade()
             end
             
             local angle = startAngle + stepAngle * i
-            local nextAngle = startAngle + stepAngle * (i + 1)
             
-            -- 計算當前和下一個位置
-            local currentOffset = Vector3.new(
+            -- 修正版：正確計算圓周上的位置
+            local offset = Vector3.new(
                 math.cos(angle) * evadeRadius,
                 0,
                 math.sin(angle) * evadeRadius
             )
-            local nextOffset = Vector3.new(
-                math.cos(nextAngle) * evadeRadius,
+            
+            -- 旋轉offset使其對齊到實際方向
+            local rotatedOffset
+            if bestPathMode == EVADE_PATHS.LEFT_BACK then
+                rotatedOffset = Vector3.new(
+                    directionToKiller.X * offset.X - directionToKiller.Z * offset.Z,
+                    0,
+                    directionToKiller.Z * offset.X + directionToKiller.X * offset.Z
+                )
+            else
+                rotatedOffset = Vector3.new(
+                    directionToKiller.X * offset.X + directionToKiller.Z * offset.Z,
+                    0,
+                    directionToKiller.Z * offset.X - directionToKiller.X * offset.Z
+                )
+            end
+            
+            local currentPoint = centerPos + rotatedOffset
+            
+            -- 計算移動方向（切線方向）
+            local tangentAngle = angle + (stepAngle > 0 and math.pi/2 or -math.pi/2)
+            local tangentOffset = Vector3.new(
+                math.cos(tangentAngle),
                 0,
-                math.sin(nextAngle) * evadeRadius
+                math.sin(tangentAngle)
             )
             
-            local currentPoint = centerPos + currentOffset
-            local nextPoint = centerPos + nextOffset
+            local rotatedTangent
+            if bestPathMode == EVADE_PATHS.LEFT_BACK then
+                rotatedTangent = Vector3.new(
+                    directionToKiller.X * tangentOffset.X - directionToKiller.Z * tangentOffset.Z,
+                    0,
+                    directionToKiller.Z * tangentOffset.X + directionToKiller.X * tangentOffset.Z
+                )
+            else
+                rotatedTangent = Vector3.new(
+                    directionToKiller.X * tangentOffset.X + directionToKiller.Z * tangentOffset.Z,
+                    0,
+                    directionToKiller.Z * tangentOffset.X - directionToKiller.X * tangentOffset.Z
+                )
+            end
             
-            -- 計算移動方向和速度
-            local moveDirection = (nextPoint - currentPoint).Unit
+            local moveDirection = rotatedTangent.Unit
             bodyVelocity.Velocity = moveDirection * values.evadeSpeed
             
-            -- 讓角色面向移動方向
             local lookDirection = moveDirection * Vector3.new(1, 0, 1)
             if lookDirection.Magnitude > 0 then
                 hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
@@ -745,8 +755,8 @@ local function performEvade()
             task.wait(0.03)
         end
         
-        -- 反繞完成後繼續前進
-        local finalDirection = (hrp.Position - killerHRP.Position).Unit
+        -- 反繞完成後繼續前進（確保是往後方）
+        local finalDirection = -directionToKiller.Unit  -- 直接背離殺手
         local forwardDistance = evadeRadius
         local forwardTime = forwardDistance / values.evadeSpeed
         local forwardSteps = math.ceil(forwardTime / 0.03)
@@ -754,10 +764,8 @@ local function performEvade()
         for i = 1, forwardSteps do
             if not isEvading or not toggles.autoEvade then break end
             
-            -- 繼續往前衝
             bodyVelocity.Velocity = finalDirection * values.evadeSpeed
             
-            -- 保持面向前方
             local lookDirection = finalDirection * Vector3.new(1, 0, 1)
             if lookDirection.Magnitude > 0 then
                 hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
@@ -766,7 +774,6 @@ local function performEvade()
             task.wait(0.03)
         end
         
-        -- 清理並恢復控制
         bodyVelocity:Destroy()
         humanoid.AutoRotate = originalAutoRotate
         
@@ -779,6 +786,7 @@ local function performEvade()
         isEvading = false
     end)
 end
+
 
 -- ==========================================================
 -- 修改 7: 尋找最近玩家函數（支援鎖定）
