@@ -1,6 +1,8 @@
 -- Roblox 全能控制器 (修改版 v1.3 - forsaken專用)
 -- 更新：防反繞會偵測障礙物 偵測到時暫停追蹤
 
+local update = "Roblox 全能控制器(修改版 v1.3 - forsaken專用)已載入"
+
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
 local player = Players.LocalPlayer
@@ -2413,7 +2415,7 @@ task.spawn(function()
     if player.Character then task.wait(0.1); getOriginalValues() end
 end)
 
-print("🎮 貓玲的控制器 v3.0 已載入！自動反繞系統就緒。")
+print(update)
 
 -- ====================
 -- ShiftLock + ESP UI 整合
