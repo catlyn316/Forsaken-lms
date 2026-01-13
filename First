@@ -2,6 +2,7 @@
 -- 更新：防反繞會偵測障礙物 偵測到時暫停追蹤
 
 local update = "Roblox 全能控制器(修改版 v1.3 - forsaken專用)已載入"
+local update2 = "更新：防反繞會偵測障礙物 偵測到時暫停追蹤"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -2416,6 +2417,7 @@ task.spawn(function()
 end)
 
 print(update)
+print(update2)
 
 -- ====================
 -- ShiftLock + ESP UI 整合
