@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v1.3 - forsaken專用)已載入"
-local update2 = "更新：防反繞會偵測障礙物 偵測到時暫停追蹤"
+local update = "Roblox 全能控制器(修改版 v1.4 - forsaken專用)已載入"
+local update2 = "更新：移除自動反繞 只保留防反繞 優化碰壁檢測"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -48,7 +48,7 @@ local toggles = {
     cameraDist = false,
     nofog = false,
     noFilter = false,
-    autoEvade = false,
+    counterEvade = false,  -- 改名為 counterEvade
     generatorESP = false,
     itemESP = false,
     autoInvisible = false,
@@ -70,7 +70,7 @@ local connections = {
     fullbright = nil,
     nofog = nil,
     noFilter = nil,
-    autoEvade = nil,
+    counterEvade = nil,  -- 改名
     generatorESP = nil,
     itemESP = nil,
     autoInvisible = nil
@@ -82,17 +82,12 @@ local espObjects = {
     items = {}
 }
 
--- 自動反繞系統變數
-local isEvading = false
-local lastEvadeTime = 0
-local evadeCooldown = 1.5
-
 -- 防反繞系統變數
 local isCounterEvading = false
 local lastCounterEvadeTime = 0
 local counterEvadeCooldown = 1
-local lockedTarget = nil  -- 【新增】鎖定的目標
-local targetLockStartTime = 0  -- 【新增】目標鎖定開始時間
+local lockedTarget = nil
+local targetLockStartTime = 0
 
 -- ====================
 -- ShiftLock 系統
@@ -227,523 +222,10 @@ local function applySpeed(char)
 end
 
 -- ====================
--- 自動反繞系統
+-- 防反繞系統（殺手模式）- 簡化版
 -- ====================
 
--- 檢查玩家是否為殺手
-local function isPlayerKiller()
-    -- 調試輸出
-    print("🔍 開始檢測玩家身份...")
-    print("   當前玩家名稱：", player.Name)
-    
-    local playersFolder = Workspace:FindFirstChild("Players")
-    if not playersFolder then 
-        print("   ❌ 找不到 Workspace.Players")
-        return false 
-    end
-    print("   ✅ 找到 Workspace.Players")
-    
-    local killersFolder = playersFolder:FindFirstChild("Killers")
-    if not killersFolder then 
-        print("   ❌ 找不到 Workspace.Players.Killers")
-        return false 
-    end
-    print("   ✅ 找到 Workspace.Players.Killers")
-    
-    -- 遍歷所有殺手角色
-    print("   🔎 開始檢查殺手列表...")
-    for _, killerChar in pairs(killersFolder:GetChildren()) do
-        if killerChar:IsA("Model") then
-            print("      檢查角色：", killerChar.Name)
-            
-            -- 檢查 Attributes 中的 Username（大寫 U）
-            local username = killerChar:GetAttribute("Username")
-            print("         Username 屬性值：", username or "nil")
-            
-            if username then
-                if username == player.Name then
-                    print("   ✅✅✅ 匹配成功！你是殺手！")
-                    return true
-                else
-                    print("         不匹配（", username, "≠", player.Name, "）")
-                end
-            else
-                print("         警告：此角色沒有 Username 屬性")
-            end
-        end
-    end
-    
-    print("   ❌ 檢查完畢，你不是殺手")
-    return false
-end
-
--- 尋找最近的殺手
-local function findNearestKiller()
-    local char = player.Character
-    if not char then return nil, math.huge end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil, math.huge end
-    
-    local killersFolder = Workspace:FindFirstChild("Players")
-    if not killersFolder then return nil, math.huge end
-    killersFolder = killersFolder:FindFirstChild("Killers")
-    if not killersFolder then return nil, math.huge end
-    
-    local nearestKiller = nil
-    local minDistance = math.huge
-    
-    for _, killerChar in pairs(killersFolder:GetChildren()) do
-        if killerChar:IsA("Model") then
-            local killerHRP = killerChar:FindFirstChild("HumanoidRootPart")
-            if killerHRP then
-                local distance = (hrp.Position - killerHRP.Position).Magnitude
-                if distance < minDistance then
-                    minDistance = distance
-                    nearestKiller = killerChar
-                end
-            end
-        end
-    end
-    
-    return nearestKiller, minDistance
-end
-
--- ==========================================================
--- 修正版本：以殺手面向玩家的方向為基準
--- ==========================================================
-
--- 反繞路徑定義
-local EVADE_PATHS = {
-    LEFT_BACK = 1,
-    RIGHT_BACK = 2
-}
-
--- 路徑參數計算（以殺手視角為基準）
-local function getPathParameters(mode, hrpPos, killerPos, radius)
-    -- 殺手指向玩家的方向（殺手的"前方"）
-    local killerToPlayer = (hrpPos - killerPos).Unit
-    -- 殺手視角的左右方向
-    local killerPerpendicular = Vector3.new(-killerToPlayer.Z, 0, killerToPlayer.X)
-    
-    local startAngle, endAngle, centerPos
-    
-    if mode == EVADE_PATHS.LEFT_BACK then
-        -- 圓心在玩家位置，往殺手的左側偏移
-        centerPos = hrpPos + killerPerpendicular * radius
-        -- 從殺手方向開始，逆時針轉180度到殺手後方
-        startAngle = 0
-        endAngle = math.pi
-        
-    elseif mode == EVADE_PATHS.RIGHT_BACK then
-        -- 圓心在玩家位置，往殺手的右側偏移
-        centerPos = hrpPos - killerPerpendicular * radius
-        -- 從殺手方向開始，順時針轉180度到殺手後方
-        startAngle = 0
-        endAngle = -math.pi
-    end
-    
-    return startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular
-end
-
--- 路徑評估
-local function evaluatePath(mode, hrpPos, killerPos, radius, char)
-    local startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(mode, hrpPos, killerPos, radius)
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    local testPoints = 8
-    local clearPoints = 0
-    local minObstacleDistance = math.huge
-    local hasBlockedPath = false
-    
-    for i = 0, testPoints do
-        local t = i / testPoints
-        local angle = startAngle + (endAngle - startAngle) * t
-        
-        -- 計算圓周上的點（相對於圓心）
-        -- angle=0時指向殺手，angle=π時背向殺手
-        local localForward = math.cos(angle) * radius  -- 前後方向（殺手視角）
-        local localSide = math.sin(angle) * radius     -- 左右方向（殺手視角）
-        
-        -- 轉換到世界座標
-        local testPoint
-        if mode == EVADE_PATHS.LEFT_BACK then
-            -- 左側繞行：圓心在左側，從殺手方向逆時針轉到後方
-            testPoint = centerPos - killerToPlayer * localForward + killerPerpendicular * localSide
-        else
-            -- 右側繞行：圓心在右側，從殺手方向順時針轉到後方
-            testPoint = centerPos - killerToPlayer * localForward - killerPerpendicular * localSide
-        end
-        
-        local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
-        if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
-            clearPoints = clearPoints + 1
-        else
-            local obstacleDistance = (ray.Position - testPoint).Magnitude
-            minObstacleDistance = math.min(minObstacleDistance, obstacleDistance)
-            
-            if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
-                hasBlockedPath = true
-            end
-        end
-    end
-    
-    if hasBlockedPath then
-        clearPoints = clearPoints * 0.3
-    end
-    
-    local score = clearPoints * 10 + minObstacleDistance
-    score = score + 100
-    
-    return score, clearPoints, hasBlockedPath, minObstacleDistance
-end
-
--- 路徑選擇
-local function chooseBestPath(hrpPos, killerPos, radius, char)
-    local bestMode = EVADE_PATHS.LEFT_BACK
-    local bestScore = -1
-    local allPathsBlocked = true
-    
-    for mode = 1, 2 do
-        local score, clearPoints, blocked, minObstacleDistance = evaluatePath(mode, hrpPos, killerPos, radius, char)
-        if clearPoints > 4 then
-            allPathsBlocked = false
-        end
-        
-        if score > bestScore then
-            bestScore = score
-            bestMode = mode
-        end
-    end
-    
-    if allPathsBlocked then
-        return nil
-    end
-    
-    return bestMode
-end
-
--- 應急逃離策略
-local function emergencyEvade(hrp, killerHRP, humanoid, char)
-    local bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-    bodyVelocity.P = 10000
-    bodyVelocity.Parent = hrp
-    
-    humanoid.AutoRotate = false
-    
-    local toKillerDirection = (killerHRP.Position - hrp.Position).Unit
-    local bestDirection = -toKillerDirection
-    local maxScore = -math.huge
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do
-        local testDirection = Vector3.new(
-            math.cos(angle),
-            0,
-            math.sin(angle)
-        )
-        
-        local dotProduct = testDirection:Dot(toKillerDirection)
-        
-        if dotProduct > 0.5 then
-            continue
-        end
-        
-        local ray = Workspace:Raycast(hrp.Position, testDirection * values.evadeRange * 2, params)
-        local clearDistance = ray and (ray.Position - hrp.Position).Magnitude or (values.evadeRange * 2)
-        
-        local score = clearDistance
-        
-        if dotProduct < -0.7 and dotProduct > -1 then
-            score = score * 3
-        elseif dotProduct <= -0.7 then
-            score = score * 2
-        elseif dotProduct < 0 then
-            score = score * 1.5
-        else
-            score = score * 1.1
-        end
-        
-        if score > maxScore then
-            maxScore = score
-            bestDirection = testDirection
-        end
-    end
-    
-    local rushTime = 1.5
-    local rushSteps = math.ceil(rushTime / 0.03)
-    
-    for i = 1, rushSteps do
-        if not isEvading or not toggles.autoEvade then break end
-        
-        bodyVelocity.Velocity = bestDirection * values.evadeSpeed * 1.2
-        
-        local lookDirection = bestDirection * Vector3.new(1, 0, 1)
-        if lookDirection.Magnitude > 0 then
-            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-        end
-        
-        task.wait(0.03)
-    end
-    
-    bodyVelocity:Destroy()
-    humanoid.AutoRotate = true
-end
-
--- 檢測路徑是否有障礙物
-local function checkPathClear(startPos, endPos, char)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    local direction = (endPos - startPos)
-    local distance = direction.Magnitude
-    
-    if distance == 0 then return true end
-    
-    local ray = Workspace:Raycast(startPos, direction, params)
-    return ray == nil or (ray.Position - startPos).Magnitude > distance * 0.9
-end
-
--- 尋找最佳反繞半徑
-local function findBestEvadeRadius(startPos, killerPos, goLeft, char)
-    local baseRadius = values.evadeRange
-    local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
-    
-    for _, radius in ipairs(radiusOptions) do
-        local killerToPlayer = (startPos - killerPos).Unit
-        local killerPerpendicular = Vector3.new(-killerToPlayer.Z, 0, killerToPlayer.X)
-        
-        local testsPassed = true
-        
-        for angle = 0, math.pi, math.pi / 5 do
-            local localForward = math.cos(angle) * radius
-            local localSide = math.sin(angle) * radius
-            
-            local testPoint
-            if goLeft then
-                testPoint = (startPos + killerPerpendicular * radius) - killerToPlayer * localForward + killerPerpendicular * localSide
-            else
-                testPoint = (startPos - killerPerpendicular * radius) - killerToPlayer * localForward - killerPerpendicular * localSide
-            end
-            
-            if not checkPathClear(startPos, testPoint, char) then
-                testsPassed = false
-                break
-            end
-        end
-        
-        if testsPassed then
-            return radius
-        end
-    end
-    
-    return baseRadius * 0.5
-end
-
--- 執行反繞動作
-local function performEvade()
-    local char = player.Character
-    if not char then return end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not humanoid then return end
-    
-    local killer, distance = findNearestKiller()
-    if not killer or distance > values.evadeRange then return end
-    
-    local killerHRP = killer:FindFirstChild("HumanoidRootPart")
-    if not killerHRP then return end
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char, killer}
-    
-    local directionToKiller = killerHRP.Position - hrp.Position
-    local rayResult = Workspace:Raycast(hrp.Position, directionToKiller, params)
-    
-    if rayResult then
-        return
-    end
-    
-    local currentTime = tick()
-    if currentTime - lastEvadeTime < evadeCooldown then return end
-    
-    isEvading = true
-    lastEvadeTime = currentTime
-    
-    local originalWalkSpeed = humanoid.WalkSpeed
-    local originalAutoRotate = humanoid.AutoRotate
-    
-    local evadeRadius = findBestEvadeRadius(hrp.Position, killerHRP.Position, true, char)
-    
-    local bestPathMode = chooseBestPath(hrp.Position, killerHRP.Position, evadeRadius, char)
-    
-    if not bestPathMode then
-        disableShiftLock()
-        
-        task.spawn(function()
-            emergencyEvade(hrp, killerHRP, humanoid, char)
-            
-            if toggles.speed then
-                humanoid.WalkSpeed = values.speed
-            else
-                humanoid.WalkSpeed = originalSpeed
-            end
-            
-            isEvading = false
-        end)
-        return
-    end
-    
-    disableShiftLock()
-    
-    local startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
-    
-    task.spawn(function()
-        local bodyVelocity = Instance.new("BodyVelocity")
-        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-        bodyVelocity.P = 10000
-        bodyVelocity.Parent = hrp
-        
-        humanoid.AutoRotate = false
-        
-        local stuckCheckInterval = 0.15
-        local lastCheckTime = tick()
-        local lastPosition = hrp.Position
-        local stuckThreshold = 1
-        local consecutiveStuckCount = 0
-        local maxStuckCount = 3
-        
-        local totalTime = (math.abs(endAngle - startAngle) * evadeRadius) / values.evadeSpeed
-        local steps = math.ceil(totalTime / 0.03)
-        local stepAngle = (endAngle - startAngle) / steps
-        
-        for i = 1, steps do
-            if not isEvading or not toggles.autoEvade then break end
-            
-            local currentTime = tick()
-            if currentTime - lastCheckTime >= stuckCheckInterval then
-                local distanceMoved = (hrp.Position - lastPosition).Magnitude
-                
-                if distanceMoved < stuckThreshold then
-                    consecutiveStuckCount = consecutiveStuckCount + 1
-                    
-                    if consecutiveStuckCount >= maxStuckCount then
-                        local newBestMode = (bestPathMode == EVADE_PATHS.LEFT_BACK) and EVADE_PATHS.RIGHT_BACK or EVADE_PATHS.LEFT_BACK
-                        
-                        local score = evaluatePath(newBestMode, hrp.Position, killerHRP.Position, evadeRadius, char)
-                        
-                        if score > 0 then
-                            bestPathMode = newBestMode
-                            startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
-                            
-                            local remainingAngle = math.abs(endAngle - startAngle)
-                            steps = math.ceil((remainingAngle * evadeRadius / values.evadeSpeed) / 0.03)
-                            stepAngle = (endAngle - startAngle) / steps
-                            i = 0
-                        else
-                            evadeRadius = evadeRadius * 0.7
-                            startAngle, endAngle, centerPos, killerToPlayer, killerPerpendicular = getPathParameters(bestPathMode, hrp.Position, killerHRP.Position, evadeRadius)
-                            steps = math.ceil((math.abs(endAngle - startAngle) * evadeRadius / values.evadeSpeed) / 0.03)
-                            stepAngle = (endAngle - startAngle) / steps
-                            i = 0
-                        end
-                        
-                        consecutiveStuckCount = 0
-                    end
-                else
-                    consecutiveStuckCount = 0
-                end
-                
-                lastPosition = hrp.Position
-                lastCheckTime = currentTime
-            end
-            
-            local angle = startAngle + stepAngle * i
-            
-            -- 計算圓周上的點（以殺手視角為基準）
-            local localForward = math.cos(angle) * evadeRadius
-            local localSide = math.sin(angle) * evadeRadius
-            
-            -- 轉換到世界座標
-            local currentPoint
-            if bestPathMode == EVADE_PATHS.LEFT_BACK then
-                currentPoint = centerPos - killerToPlayer * localForward + killerPerpendicular * localSide
-            else
-                currentPoint = centerPos - killerToPlayer * localForward - killerPerpendicular * localSide
-            end
-            
-            -- 計算下一個點
-            local nextAngle = startAngle + stepAngle * (i + 1)
-            local nextLocalForward = math.cos(nextAngle) * evadeRadius
-            local nextLocalSide = math.sin(nextAngle) * evadeRadius
-            
-            local nextPoint
-            if bestPathMode == EVADE_PATHS.LEFT_BACK then
-                nextPoint = centerPos - killerToPlayer * nextLocalForward + killerPerpendicular * nextLocalSide
-            else
-                nextPoint = centerPos - killerToPlayer * nextLocalForward - killerPerpendicular * nextLocalSide
-            end
-            
-            -- 計算移動方向
-            local moveDirection = (nextPoint - currentPoint).Unit
-            bodyVelocity.Velocity = moveDirection * values.evadeSpeed
-            
-            -- 面向移動方向
-            local lookDirection = moveDirection * Vector3.new(1, 0, 1)
-            if lookDirection.Magnitude > 0 then
-                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-            end
-            
-            task.wait(0.03)
-        end
-        
-        -- 反繞完成後繼續直走（背離殺手，相對於殺手視角的正後方）
-        local finalDirection = -killerToPlayer
-        local forwardDistance = evadeRadius
-        local forwardTime = forwardDistance / values.evadeSpeed
-        local forwardSteps = math.ceil(forwardTime / 0.03)
-        
-        for i = 1, forwardSteps do
-            if not isEvading or not toggles.autoEvade then break end
-            
-            bodyVelocity.Velocity = finalDirection * values.evadeSpeed
-            
-            local lookDirection = finalDirection * Vector3.new(1, 0, 1)
-            if lookDirection.Magnitude > 0 then
-                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-            end
-            
-            task.wait(0.03)
-        end
-        
-        bodyVelocity:Destroy()
-        humanoid.AutoRotate = originalAutoRotate
-        
-        if toggles.speed then
-            humanoid.WalkSpeed = values.speed
-        else
-            humanoid.WalkSpeed = originalSpeed
-        end
-        
-        isEvading = false
-    end)
-end
-
-
-
--- ==========================================================
--- 修改 7: 尋找最近玩家函數（支援鎖定）
--- ==========================================================
+-- 尋找最近玩家函數（支援鎖定）
 local function findNearestPlayer()
     local char = player.Character
     if not char then return nil, math.huge end
@@ -758,7 +240,6 @@ local function findNearestPlayer()
             local targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
             if targetHRP then
                 local distance = (hrp.Position - targetHRP.Position).Magnitude
-                print("🎯 繼續鎖定目標：", lockedTarget.Name, "剩餘時間：", string.format("%.1f", 3 - (currentTime - targetLockStartTime)))
                 return lockedTarget, distance
             end
         end
@@ -785,52 +266,27 @@ local function findNearestPlayer()
     if nearestPlayer then
         lockedTarget = nearestPlayer
         targetLockStartTime = currentTime
-        print("🔒 鎖定新目標：", nearestPlayer.Name)
     end
     
     return nearestPlayer, minDistance
 end
 
--- ====================
--- 防反繞系統（殺手模式）
--- ====================
-
 -- 執行防反繞動作（殺手追擊玩家）
 local function performCounterEvade()
-    print("🔪 [防反繞] 開始執行殺手追擊...")
-    print("   模式：", toggles.counterEvadeMode == "disguise" and "偽裝模式" or "全開模式")
-    
     local char = player.Character
-    if not char then 
-        print("❌ [防反繞] 找不到角色")
-        return 
-    end
+    if not char then return end
     
     local hrp = char:FindFirstChild("HumanoidRootPart")
     local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not humanoid then 
-        print("❌ [防反繞] 找不到 HRP 或 Humanoid")
-        return 
-    end
+    if not hrp or not humanoid then return end
     
     local targetPlayer, distance = findNearestPlayer()
-    if not targetPlayer then 
-        print("❌ [防反繞] 找不到目標玩家")
-        return 
-    end
-    if distance > values.evadeRange then 
-        print("❌ [防反繞] 目標距離過遠：", distance, "> ", values.evadeRange)
-        return 
-    end
+    if not targetPlayer then return end
+    if distance > values.evadeRange then return end
     
-    print("✅ [防反繞] 找到目標：", targetPlayer.Name, "距離：", distance)
-    
-    -- 【新增】檢查是否有障礙物阻擋
+    -- 檢查是否有障礙物阻擋
     local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
-    if not targetHRP then
-        print("❌ [防反繞] 找不到目標的 HRP")
-        return
-    end
+    if not targetHRP then return end
     
     local params = RaycastParams.new()
     params.FilterType = Enum.RaycastFilterType.Blacklist
@@ -840,28 +296,17 @@ local function performCounterEvade()
     local rayResult = Workspace:Raycast(hrp.Position, directionToTarget, params)
     
     if rayResult then
-        print("⚠️ [防反繞] 檢測到障礙物阻擋，暫停追擊（不進冷卻）")
-        return  -- 直接返回，不更新 lastCounterEvadeTime，不進入冷卻
+        return  -- 檢測到障礙物，暫停追擊（不進冷卻）
     end
-    
-    print("✅ [防反繞] 路徑暢通，開始追擊")
     
     -- 檢查冷卻時間
-    -- 偽裝模式：1秒冷卻
-    -- 全開模式：無冷卻
     local currentTime = tick()
     if toggles.counterEvadeMode == "disguise" then
-        if currentTime - lastCounterEvadeTime < 5 then 
-            print("⏱️ [偽裝模式] 冷卻中...")
-            return 
-        end
+        if currentTime - lastCounterEvadeTime < 5 then return end
     end
-    -- 全開模式不檢查冷卻
     
     isCounterEvading = true
     lastCounterEvadeTime = currentTime
-    
-    print("🏃 [防反繞] 開始追擊！")
     
     -- 解除 ShiftLock
     disableShiftLock()
@@ -880,7 +325,6 @@ local function performCounterEvade()
     task.spawn(function()
         local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not targetHRP then
-            print("❌ [防反繞] 找不到目標的 HRP")
             isCounterEvading = false
             return
         end
@@ -893,40 +337,121 @@ local function performCounterEvade()
         
         humanoid.AutoRotate = false
         
-        print("⚡ [防反繞] BodyVelocity 已創建，開始移動（速度：", values.evadeSpeed, "）")
-        
-        -- 在 1 秒內持續移動到目標
-        -- local duration = 1
         local duration = toggles.counterEvadeMode == "disguise" and 3 or 1
         local steps = math.ceil(duration / 0.03)
 
-        -- 偽裝模式:監控速度是否被設為小於5
+        -- 偽裝模式: 監控速度是否被設為小於5
         local isDisguiseMode = toggles.counterEvadeMode == "disguise"
         
+        -- 改進的碰壁檢測變數
+        local lastPosition = hrp.Position
+        local stuckCheckInterval = 0.2
+        local lastCheckTime = tick()
+        local forwardMoveThreshold = 5  -- 前方移動距離閾值
+        local consecutiveStuckCount = 0
+        local maxStuckCount = 3
+        
+        -- 改進的目標掛機檢測
+        local lastTargetPosition = targetHRP.Position
+        local targetStuckCount = 0
+        local maxTargetStuckCount = 8  -- 增加到8次才判定為掛機
+        local targetMoveThreshold = 2  -- 目標移動距離閾值增加到2
+        local targetCirclingDetection = {}  -- 繞圈檢測
+        local circlingCheckCount = 0
+        
         for i = 1, steps do
-            if not isCounterEvading or not toggles.autoEvade then
-                print("⚠️ [防反繞] 提前中斷")
+            if not isCounterEvading or not toggles.counterEvade then
                 break
             end
             
-            -- 偽裝模式:檢查速度是否小於5
+            -- 偽裝模式: 檢查速度是否小於5
             if isDisguiseMode and humanoid.WalkSpeed < 5 then
-                print("⚠️ [偽裝模式] 檢測到速度小於 5,進入冷卻")
                 lastCounterEvadeTime = tick()  -- 立即進入冷卻(5秒)
                 break
             end
+            
+            -- 改進的碰壁檢測：檢測前方是否有障礙物 + 前方移動距離
+            local currentTime = tick()
+            if currentTime - lastCheckTime >= stuckCheckInterval then
+                -- 計算面向方向的移動距離
+                local moveVector = hrp.Position - lastPosition
+                local lookDirection = hrp.CFrame.LookVector
+                local forwardMovement = moveVector:Dot(lookDirection)  -- 前方移動分量
+                
+                -- 檢測前方是否有障礙物
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Blacklist
+                rayParams.FilterDescendantsInstances = {char, targetPlayer.Character}
+                
+                local forwardRay = Workspace:Raycast(hrp.Position, lookDirection * 10, rayParams)
+                local hasObstacleAhead = forwardRay ~= nil and forwardRay.Distance < 5
+                
+                -- 如果前方有障礙物 且 前方移動距離小於5
+                if hasObstacleAhead and forwardMovement < forwardMoveThreshold then
+                    consecutiveStuckCount = consecutiveStuckCount + 1
+                    if consecutiveStuckCount >= maxStuckCount then
+                        -- 玩家碰壁，暫停防反繞
+                        break
+                    end
+                else
+                    consecutiveStuckCount = 0
+                end
+                
+                -- 改進的目標掛機檢測
+                local targetDistanceMoved = (targetHRP.Position - lastTargetPosition).Magnitude
+                
+                if targetDistanceMoved < targetMoveThreshold then
+                    targetStuckCount = targetStuckCount + 1
+                    
+                    -- 同時檢測是否在繞圈（玩家和目標距離變化很小）
+                    local currentDistance = (hrp.Position - targetHRP.Position).Magnitude
+                    table.insert(targetCirclingDetection, currentDistance)
+                    
+                    if #targetCirclingDetection > 5 then
+                        table.remove(targetCirclingDetection, 1)
+                        
+                        -- 計算距離變化
+                        local minDist = math.huge
+                        local maxDist = -math.huge
+                        for _, dist in ipairs(targetCirclingDetection) do
+                            minDist = math.min(minDist, dist)
+                            maxDist = math.max(maxDist, dist)
+                        end
+                        
+                        -- 如果距離變化小於3（在繞圈）
+                        if (maxDist - minDist) < 3 then
+                            circlingCheckCount = circlingCheckCount + 1
+                            if circlingCheckCount >= 3 then
+                                -- 檢測到繞圈，暫停防反繞
+                                break
+                            end
+                        else
+                            circlingCheckCount = 0
+                        end
+                    end
+                    
+                    -- 如果目標長時間不動
+                    if targetStuckCount >= maxTargetStuckCount then
+                        -- 目標掛機，暫停防反繞
+                        break
+                    end
+                else
+                    targetStuckCount = 0
+                    circlingCheckCount = 0
+                    targetCirclingDetection = {}
+                end
+                
+                lastPosition = hrp.Position
+                lastTargetPosition = targetHRP.Position
+                lastCheckTime = currentTime
+            end
 
-            -- ==========================================================
-            -- 修改 8: 防反繞追擊函數（持續追擊鎖定的目標，不更新目標）
-            -- ==========================================================
+            -- 持續追擊鎖定的目標
             if lockedTarget and lockedTarget.Character then
                 targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
             end
             
-            if not targetHRP then 
-                print("❌ [防反繞] 目標消失")
-                break 
-            end
+            if not targetHRP then break end
             
             -- 計算方向
             local direction = (targetHRP.Position - hrp.Position).Unit
@@ -940,8 +465,6 @@ local function performCounterEvade()
             
             task.wait(0.03)
         end
-        
-        print("✅ [防反繞] 追擊完成！")
         
         -- 清理
         bodyVelocity:Destroy()
@@ -963,39 +486,23 @@ local function performCounterEvade()
     end)
 end
 
--- 自動反繞監控
-local function startAutoEvade()
-    if connections.autoEvade then connections.autoEvade:Disconnect() end
+-- 防反繞監控
+local function startCounterEvade()
+    if connections.counterEvade then connections.counterEvade:Disconnect() end
     
-    if toggles.autoEvade then
-        -- 緩存身份檢測結果，每2秒更新一次
-        local cachedIsKiller = false
-        local lastIdentityCheck = 0
-        
-        connections.autoEvade = RunService.Heartbeat:Connect(function()
-            -- 每2秒更新一次身份
-            local currentTime = tick()
-            if currentTime - lastIdentityCheck > 2 then
-                cachedIsKiller = isPlayerKiller()
-                lastIdentityCheck = currentTime
-            end
-            
-            if not isEvading and not isCounterEvading then
-                if cachedIsKiller then
-                    performCounterEvade()
-                else
-                    performEvade()
-                end
+    if toggles.counterEvade then
+        connections.counterEvade = RunService.Heartbeat:Connect(function()
+            if not isCounterEvading then
+                performCounterEvade()
             end
         end)
     else
-        if connections.autoEvade then
-            connections.autoEvade:Disconnect()
-            connections.autoEvade = nil
+        if connections.counterEvade then
+            connections.counterEvade:Disconnect()
+            connections.counterEvade = nil
         end
     end
 end
-
 
 -- ====================
 -- ESP 顯示系統
@@ -1018,7 +525,7 @@ local function createESPBox(part, color, itemType)
     local billboard = Instance.new("BillboardGui")
     billboard.Name = "ESPLabel"
     billboard.Adornee = part
-    billboard.Size = UDim2.new(0, 100, 0, 60)  -- 增加高度以容納進度
+    billboard.Size = UDim2.new(0, 100, 0, 60)
     billboard.StudsOffset = Vector3.new(0, 2, 0)
     billboard.AlwaysOnTop = true
     billboard.Parent = part
@@ -1127,7 +634,7 @@ local function updateGeneratorESP()
     -- 遍歷整個 Workspace，尋找符合條件的發電機
     for _, obj in pairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and isValidGenerator(obj) then
-            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(0, 255, 0), "generator")  -- 添加 "generator" 參數
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(0, 255, 0), "generator")
             table.insert(espObjects.generators, {
                 part = obj,
                 box = box,
@@ -1147,7 +654,7 @@ local function updateItemESP()
     -- 遍歷整個 Workspace，尋找路徑包含 itemroot 的物品
     for _, obj in pairs(Workspace:GetDescendants()) do
         if obj:IsA("BasePart") and isItemInPath(obj) then
-            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(255, 255, 0), "item")  -- 添加 "item" 參數
+            local box, billboard, connection = createESPBox(obj, Color3.fromRGB(255, 255, 0), "item")
             table.insert(espObjects.items, {
                 part = obj,
                 box = box,
@@ -1167,7 +674,7 @@ local function startItemMonitoring()
             if descendant:IsA("BasePart") and isItemInPath(descendant) then
                 task.wait(0.1)
                 if toggles.itemESP then
-                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(255, 255, 0), "item")  -- 添加 "item" 參數
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(255, 255, 0), "item")
                     table.insert(espObjects.items, {
                         part = descendant,
                         box = box,
@@ -1187,9 +694,9 @@ local function startGeneratorMonitoring()
     if toggles.generatorESP then
         connections.generatorESP = Workspace.DescendantAdded:Connect(function(descendant)
             if descendant:IsA("BasePart") then
-                task.wait(0.1)  -- 等待完全加載
+                task.wait(0.1)
                 if toggles.generatorESP and isValidGenerator(descendant) then
-                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(0, 255, 0), "generator")  -- 添加 "generator" 參數
+                    local box, billboard, connection = createESPBox(descendant, Color3.fromRGB(0, 255, 0), "generator")
                     table.insert(espObjects.generators, {
                         part = descendant,
                         box = box,
@@ -1206,9 +713,185 @@ end
 player.CharacterAdded:Connect(function(newChar)
     task.wait(0.5)
     if toggles.speed then applySpeed(newChar) end
-    lastEvadeTime = 0
-    isEvading = false
+    lastCounterEvadeTime = 0
+    isCounterEvading = false
 end)
+
+-- ====================
+-- 自動隱形系統（簡化版 - 只保留一種路徑）
+-- ====================
+
+local autoInvisToggles = {
+    autoEvade = false
+}
+
+local autoInvisValues = {
+    evadeRange = 15,
+    evadeSpeed = 30
+}
+
+local autoInvisConnections = {
+    autoEvade = nil
+}
+
+local isAutoInvisEvading = false
+local lastAutoInvisEvadeTime = 0
+local autoInvisEvadeCooldown = 1.5
+
+-- 尋找最近的玩家（包括自己）
+local function findNearestPlayerForInvis()
+    local char = player.Character
+    if not char then return nil, math.huge end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    if not hrp then return nil, math.huge end
+    
+    local nearestPlayer = nil
+    local minDistance = math.huge
+    
+    for _, otherPlayer in pairs(Players:GetPlayers()) do
+        if otherPlayer.Character then
+            local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
+            if otherHRP then
+                local distance = (hrp.Position - otherHRP.Position).Magnitude
+                if distance < minDistance then
+                    minDistance = distance
+                    nearestPlayer = otherPlayer
+                end
+            end
+        end
+    end
+    
+    return nearestPlayer, minDistance
+end
+
+-- 簡化版反繞 - 只使用左後方路徑
+local function performSimpleEvade()
+    local char = player.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
+    
+    local targetPlayer, distance = findNearestPlayerForInvis()
+    if not targetPlayer then return end
+    if distance > autoInvisValues.evadeRange then return end
+    
+    local targetChar = targetPlayer.Character
+    if not targetChar then return end
+    
+    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then return end
+    
+    -- 檢查是否有障礙物阻擋
+    local params = RaycastParams.new()
+    params.FilterType = Enum.RaycastFilterType.Blacklist
+    params.FilterDescendantsInstances = {char, targetChar}
+    
+    local directionToTarget = targetHRP.Position - hrp.Position
+    local rayResult = Workspace:Raycast(hrp.Position, directionToTarget, params)
+    
+    if rayResult then return end
+    
+    -- 檢查冷卻時間
+    local currentTime = tick()
+    if currentTime - lastAutoInvisEvadeTime < autoInvisEvadeCooldown then return end
+    
+    isAutoInvisEvading = true
+    lastAutoInvisEvadeTime = currentTime
+    
+    local originalAutoRotate = humanoid.AutoRotate
+    local evadeRadius = autoInvisValues.evadeRange
+    
+    task.spawn(function()
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+        bodyVelocity.P = 10000
+        bodyVelocity.Parent = hrp
+        
+        humanoid.AutoRotate = false
+        
+        -- 只使用左後方半圓路徑
+        local directionToTarget = (targetHRP.Position - hrp.Position).Unit
+        local perpendicular = Vector3.new(-directionToTarget.Z, 0, directionToTarget.X)
+        
+        local startAngle = math.pi / 2
+        local endAngle = math.pi * 1.5
+        local centerPos = hrp.Position + perpendicular * evadeRadius
+        
+        local totalTime = (math.pi * evadeRadius) / autoInvisValues.evadeSpeed
+        local steps = math.ceil(totalTime / 0.03)
+        local stepAngle = (endAngle - startAngle) / steps
+        
+        for i = 1, steps do
+            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
+            
+            local angle = startAngle + stepAngle * i
+            local nextAngle = startAngle + stepAngle * (i + 1)
+            
+            local currentOffset = Vector3.new(
+                math.cos(angle) * evadeRadius,
+                0,
+                math.sin(angle) * evadeRadius
+            )
+            local nextOffset = Vector3.new(
+                math.cos(nextAngle) * evadeRadius,
+                0,
+                math.sin(nextAngle) * evadeRadius
+            )
+            
+            local currentPoint = centerPos + currentOffset
+            local nextPoint = centerPos + nextOffset
+            
+            local moveDirection = (nextPoint - currentPoint).Unit
+            bodyVelocity.Velocity = moveDirection * autoInvisValues.evadeSpeed
+            
+            local lookDirection = moveDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        -- 反繞完成後繼續前進
+        local finalDirection = (hrp.Position - targetHRP.Position).Unit
+        local forwardDistance = evadeRadius
+        local forwardTime = forwardDistance / autoInvisValues.evadeSpeed
+        local forwardSteps = math.ceil(forwardTime / 0.03)
+        
+        for i = 1, forwardSteps do
+            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
+            
+            bodyVelocity.Velocity = finalDirection * autoInvisValues.evadeSpeed
+            
+            local lookDirection = finalDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        bodyVelocity:Destroy()
+        humanoid.AutoRotate = originalAutoRotate
+        isAutoInvisEvading = false
+    end)
+end
+
+-- 自動隱形監控
+local function startAutoInvisible()
+    if autoInvisConnections.autoEvade then autoInvisConnections.autoEvade:Disconnect() end
+    
+    if autoInvisToggles.autoEvade then
+        autoInvisConnections.autoEvade = RunService.Heartbeat:Connect(function()
+            if not isAutoInvisEvading then
+                performSimpleEvade()
+            end
+        end)
+    end
+end
 
 -- ====================
 -- UI 建構
@@ -1296,7 +979,7 @@ local function createTab(text, index)
 end
 
 local tab1 = createTab("基本設置", 1)
-local tab2 = createTab("自動反繞", 2)
+local tab2 = createTab("防反繞", 2)
 local tab3 = createTab("其他", 3)
 
 local contentContainer = Instance.new("Frame")
@@ -1406,7 +1089,7 @@ local function createControlRow(parent, labelText, placeholder, defaultVal, isIn
     return frame, input, btn
 end
 
--- 創建無按鈕的輸入行（用於反繞參數）
+-- 創建無按鈕的輸入行
 local function createInputOnlyRow(parent, labelText, defaultVal, order)
     local frame = Instance.new("Frame")
     frame.Size = UDim2.new(1, 0, 0, 32)
@@ -1449,30 +1132,17 @@ local cameraDistFrame, cameraDistInput, cameraDistButton = createControlRow(page
 local nofogFrame, nofogStatus, nofogButton = createControlRow(page1, "除霧:", "", "", false, 4)
 local noFilterFrame, noFilterStatus, noFilterButton = createControlRow(page1, "無濾鏡:", "", "", false, 5)
 
--- 頁面 2 - 自動反繞
-local evadeFrame, evadeStatus, evadeButton = createControlRow(page2, "反繞/防反繞:", "", "", false, 1)
-local evadeRangeFrame, evadeRangeInput = createInputOnlyRow(page2, "反繞範圍:", "15", 2)
-local evadeSpeedFrame, evadeSpeedInput = createInputOnlyRow(page2, "反繞速度:", "30", 3)
+-- 頁面 2 - 防反繞
+local evadeFrame, evadeStatus, evadeButton = createControlRow(page2, "防反繞:", "", "", false, 1)
+local evadeRangeFrame, evadeRangeInput = createInputOnlyRow(page2, "追擊範圍:", "15", 2)
+local evadeSpeedFrame, evadeSpeedInput = createInputOnlyRow(page2, "追擊速度:", "30", 3)
 
--- 添加模式指示標籤
-local evadeModeLabel = Instance.new("TextLabel")
-evadeModeLabel.Size = UDim2.new(1, 0, 0, 20)
-evadeModeLabel.Position = UDim2.new(0, 0, 0, 0)
-evadeModeLabel.BackgroundTransparency = 1
-evadeModeLabel.Text = "當前模式：反繞模式"
-evadeModeLabel.TextSize = 10
-evadeModeLabel.Font = Enum.Font.GothamBold
-evadeModeLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-evadeModeLabel.LayoutOrder = 4
-evadeModeLabel.Parent = page2
-
--- 添加防反繞模式選擇（僅殺手可見）
+-- 添加防反繞模式選擇
 local counterModeFrame = Instance.new("Frame")
 counterModeFrame.Size = UDim2.new(1, 0, 0, 35)
 counterModeFrame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
 counterModeFrame.BorderSizePixel = 0
-counterModeFrame.LayoutOrder = 5
-counterModeFrame.Visible = false  -- 預設隱藏
+counterModeFrame.LayoutOrder = 4
 counterModeFrame.Parent = page2
 Instance.new("UICorner", counterModeFrame).CornerRadius = UDim.new(0, 6)
 
@@ -1532,7 +1202,7 @@ local function updateStatus()
     local active = {}
     if toggles.speed then table.insert(active, "速度") end
     if toggles.fullbright then table.insert(active, "全亮") end
-    if toggles.autoEvade then table.insert(active, "反繞") end
+    if toggles.counterEvade then table.insert(active, "防反繞") end
     
     if #active > 0 then
         statusLabel.Text = "✅ " .. table.concat(active, " | ")
@@ -1649,40 +1319,22 @@ cameraDistButton.MouseButton1Click:Connect(function()
     toggleUIState(cameraDistButton, cameraDistFrame, cameraDistInput, toggles.cameraDist)
 end)
 
--- 自動反繞/防反繞
+-- 防反繞
 evadeButton.MouseButton1Click:Connect(function()
-    toggles.autoEvade = not toggles.autoEvade
-    if toggles.autoEvade then
+    toggles.counterEvade = not toggles.counterEvade
+    if toggles.counterEvade then
         values.evadeRange = tonumber(evadeRangeInput.Text) or 15
         values.evadeSpeed = tonumber(evadeSpeedInput.Text) or 30
         
-        -- 檢測並顯示當前身份
-        local isKiller = isPlayerKiller()
-        print("🔍 當前身份檢測：", isKiller and "殺手" or "倖存者")
-        
-        startAutoEvade()
+        startCounterEvade()
         evadeStatus.Text = "開啟"
         evadeStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
-        
-        -- 更新模式顯示
-        if isKiller then
-            evadeModeLabel.Text = "當前模式：防反繞模式（殺手）"
-            evadeModeLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-            counterModeFrame.Visible = true  -- 顯示模式選擇
-        else
-            evadeModeLabel.Text = "當前模式：反繞模式（逃生者）"
-            evadeModeLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
-            counterModeFrame.Visible = false  -- 隱藏模式選擇
-        end
     else
-        if connections.autoEvade then connections.autoEvade:Disconnect() end
+        if connections.counterEvade then connections.counterEvade:Disconnect() end
         evadeStatus.Text = "關閉"
         evadeStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
-        evadeModeLabel.Text = "當前模式：未啟用"
-        evadeModeLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-        counterModeFrame.Visible = false  -- 關閉時隱藏
     end
-    toggleUIState(evadeButton, evadeFrame, evadeStatus, toggles.autoEvade)
+    toggleUIState(evadeButton, evadeFrame, evadeStatus, toggles.counterEvade)
 end)
 
 -- 防反繞模式切換按鈕
@@ -1690,40 +1342,19 @@ counterModeButton.MouseButton1Click:Connect(function()
     if toggles.counterEvadeMode == "disguise" then
         toggles.counterEvadeMode = "fullpower"
         counterModeButton.Text = "全開"
-        counterModeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)  -- 紅色
+        counterModeButton.BackgroundColor3 = Color3.fromRGB(244, 67, 54)
         counterModeStatus.Text = "全開"
         counterModeStatus.TextColor3 = Color3.fromRGB(244, 67, 54)
-        print("🔄 切換到全開模式")
     else
         toggles.counterEvadeMode = "disguise"
         counterModeButton.Text = "偽裝"
-        counterModeButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)  -- 綠色
+        counterModeButton.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
         counterModeStatus.Text = "偽裝"
         counterModeStatus.TextColor3 = Color3.fromRGB(76, 175, 80)
-        print("🔄 切換到偽裝模式")
     end
 end)
 
--- 定期更新模式顯示
-task.spawn(function()
-    while true do
-        task.wait(2)
-        if toggles.autoEvade then
-            local isKiller = isPlayerKiller()
-            if isKiller then
-                evadeModeLabel.Text = "當前模式：防反繞模式（殺手）"
-                evadeModeLabel.TextColor3 = Color3.fromRGB(255, 100, 100)
-                counterModeFrame.Visible = true
-            else
-                evadeModeLabel.Text = "當前模式：反繞模式（逃生者）"
-                evadeModeLabel.TextColor3 = Color3.fromRGB(100, 200, 100)
-                counterModeFrame.Visible = false
-            end
-        end
-    end
-end)
-
--- 更新反繞參數
+-- 更新防反繞參數
 evadeRangeInput.FocusLost:Connect(function()
     values.evadeRange = tonumber(evadeRangeInput.Text) or 15
     evadeRangeInput.Text = tostring(values.evadeRange)
@@ -1768,491 +1399,6 @@ itemESPButton.MouseButton1Click:Connect(function()
     toggleUIState(itemESPButton, itemESPFrame, itemESPStatus, toggles.itemESP)
 end)
 
--- ====================
--- 自動隱形系統（原始腳本完整版）
--- ====================
-
--- 自動隱形專用變數（獨立於主系統）
-local autoInvisToggles = {
-    autoEvade = false
-}
-
-local autoInvisValues = {
-    evadeRange = 15,
-    evadeSpeed = 30
-}
-
-local autoInvisConnections = {
-    autoEvade = nil
-}
-
-local isAutoInvisEvading = false
-local lastAutoInvisEvadeTime = 0
-local autoInvisEvadeCooldown = 1.5
-
--- 尋找最近的玩家（包括自己）
-local function findNearestPlayerForInvis()
-    local char = player.Character
-    if not char then return nil, math.huge end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hrp then return nil, math.huge end
-    
-    local nearestPlayer = nil
-    local minDistance = math.huge
-    
-    -- 遍歷所有玩家（包括自己）
-    for _, otherPlayer in pairs(Players:GetPlayers()) do
-        if otherPlayer.Character then
-            local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if otherHRP then
-                local distance = (hrp.Position - otherHRP.Position).Magnitude
-                if distance < minDistance then
-                    minDistance = distance
-                    nearestPlayer = otherPlayer
-                end
-            end
-        end
-    end
-    
-    return nearestPlayer, minDistance
-end
-
--- 4種半圓路徑模式
-local EVADE_PATHS = {
-    LEFT_FORWARD = 1,
-    LEFT_BACK = 2,
-    RIGHT_FORWARD = 3,
-    RIGHT_BACK = 4
-}
-
--- 計算指定路徑模式的半圓參數
-local function getPathParameters(mode, hrpPos, targetPos, radius)
-    local directionToTarget = (targetPos - hrpPos).Unit
-    local perpendicular = Vector3.new(-directionToTarget.Z, 0, directionToTarget.X)
-    
-    local startAngle, endAngle, centerPos
-    
-    if mode == EVADE_PATHS.LEFT_FORWARD then
-        startAngle = 0
-        endAngle = math.pi
-        centerPos = hrpPos - directionToTarget * radius
-        
-    elseif mode == EVADE_PATHS.LEFT_BACK then
-        startAngle = math.pi / 2
-        endAngle = math.pi * 1.5
-        centerPos = hrpPos + perpendicular * radius
-        
-    elseif mode == EVADE_PATHS.RIGHT_FORWARD then
-        startAngle = math.pi
-        endAngle = math.pi * 2
-        centerPos = hrpPos - directionToTarget * radius
-        
-    elseif mode == EVADE_PATHS.RIGHT_BACK then
-        startAngle = math.pi
-        endAngle = math.pi * 2
-        centerPos = hrpPos - perpendicular * radius
-    end
-    
-    return startAngle, endAngle, centerPos
-end
-
--- 評估路徑的安全性
-local function evaluatePath(mode, hrpPos, targetPos, radius, char)
-    local startAngle, endAngle, centerPos = getPathParameters(mode, hrpPos, targetPos, radius)
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    local testPoints = 8
-    local clearPoints = 0
-    local totalDistance = 0
-    local hasBlockedPath = false
-    
-    for i = 0, testPoints do
-        local t = i / testPoints
-        local angle = startAngle + (endAngle - startAngle) * t
-        local offset = Vector3.new(
-            math.cos(angle) * radius,
-            0,
-            math.sin(angle) * radius
-        )
-        local testPoint = centerPos + offset
-        
-        local ray = Workspace:Raycast(hrpPos, (testPoint - hrpPos), params)
-        if not ray or (ray.Position - hrpPos).Magnitude > (testPoint - hrpPos).Magnitude * 0.9 then
-            clearPoints = clearPoints + 1
-        else
-            if (ray.Position - hrpPos).Magnitude < (testPoint - hrpPos).Magnitude * 0.5 then
-                hasBlockedPath = true
-            end
-        end
-        
-        if i == testPoints then
-            totalDistance = (testPoint - targetPos).Magnitude
-        end
-    end
-    
-    if hasBlockedPath then
-        clearPoints = clearPoints * 0.3
-    end
-    
-    local score = clearPoints + (totalDistance / 10)
-    
-    -- 優先往後方繞
-    if mode == EVADE_PATHS.LEFT_BACK or mode == EVADE_PATHS.RIGHT_BACK then
-        score = score + 100
-    elseif mode == EVADE_PATHS.LEFT_FORWARD or mode == EVADE_PATHS.RIGHT_FORWARD then
-        score = score + 20
-    end
-    
-    return score, clearPoints, hasBlockedPath
-end
-
--- 選擇最佳逃離路徑
-local function chooseBestPath(hrpPos, targetPos, radius, char)
-    local bestMode = EVADE_PATHS.LEFT_FORWARD
-    local bestScore = -1
-    local allPathsBlocked = true
-    
-    for mode = 1, 4 do
-        local score, clearPoints, blocked = evaluatePath(mode, hrpPos, targetPos, radius, char)
-        if clearPoints > 4 then
-            allPathsBlocked = false
-        end
-        
-        if score > bestScore then
-            bestScore = score
-            bestMode = mode
-        end
-    end
-    
-    if allPathsBlocked then
-        return nil
-    end
-    
-    return bestMode
-end
-
--- 應急逃離策略
-local function emergencyEvade(hrp, targetHRP, humanoid, char)
-    local bodyVelocity = Instance.new("BodyVelocity")
-    bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-    bodyVelocity.P = 10000
-    bodyVelocity.Parent = hrp
-    
-    humanoid.AutoRotate = false
-    
-    local toTargetDirection = (targetHRP.Position - hrp.Position).Unit
-    local awayDirection = -toTargetDirection
-    local bestDirection = awayDirection
-    local maxScore = -math.huge
-    
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    for angle = 0, 2 * math.pi - 0.01, math.pi / 8 do
-        local testDirection = Vector3.new(
-            math.cos(angle),
-            0,
-            math.sin(angle)
-        )
-        
-        local dotProduct = testDirection:Dot(toTargetDirection)
-        
-        if dotProduct > 0.5 then
-            continue
-        end
-        
-        local ray = Workspace:Raycast(hrp.Position, testDirection * autoInvisValues.evadeRange * 2, params)
-        local clearDistance = ray and (ray.Position - hrp.Position).Magnitude or (autoInvisValues.evadeRange * 2)
-        
-        local score = clearDistance
-        
-        if dotProduct < -0.7 and dotProduct > -1 then
-            score = score * 3
-        elseif dotProduct <= -0.7 then
-            score = score * 2
-        elseif dotProduct < 0 then
-            score = score * 1.5
-        else
-            score = score * 1.1
-        end
-        
-        if score > maxScore then
-            maxScore = score
-            bestDirection = testDirection
-        end
-    end
-    
-    if maxScore <= 0 then
-        bestDirection = awayDirection
-    end
-    
-    local rushTime = 1.5
-    local rushSteps = math.ceil(rushTime / 0.03)
-    
-    for i = 1, rushSteps do
-        if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
-        
-        bodyVelocity.Velocity = bestDirection * autoInvisValues.evadeSpeed * 1.2
-        
-        local lookDirection = bestDirection * Vector3.new(1, 0, 1)
-        if lookDirection.Magnitude > 0 then
-            hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-        end
-        
-        task.wait(0.03)
-    end
-    
-    bodyVelocity:Destroy()
-    humanoid.AutoRotate = true
-end
-
--- 檢測路徑是否暢通
-local function checkPathClear(startPos, endPos, char)
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char}
-    
-    local direction = (endPos - startPos)
-    local distance = direction.Magnitude
-    
-    if distance == 0 then return true end
-    
-    local ray = Workspace:Raycast(startPos, direction, params)
-    return ray == nil or (ray.Position - startPos).Magnitude > distance * 0.9
-end
-
--- 尋找最佳反繞半徑
-local function findBestEvadeRadius(startPos, targetPos, char)
-    local baseRadius = autoInvisValues.evadeRange
-    local radiusOptions = {baseRadius, baseRadius * 0.75, baseRadius * 0.5, baseRadius * 1.25}
-    
-    for _, radius in ipairs(radiusOptions) do
-        local directionToTarget = (targetPos - startPos).Unit
-        
-        local testsPassed = true
-        local startAngle = 0
-        local endAngle = math.pi
-        
-        for testAngle = startAngle, endAngle, (endAngle - startAngle) / 5 do
-            local offset = Vector3.new(
-                math.cos(testAngle) * radius,
-                0,
-                math.sin(testAngle) * radius
-            )
-            local centerPos = startPos - directionToTarget * radius
-            local testPoint = centerPos + offset
-            
-            if not checkPathClear(startPos, testPoint, char) then
-                testsPassed = false
-                break
-            end
-        end
-        
-        if testsPassed then
-            return radius
-        end
-    end
-    
-    return baseRadius * 0.5
-end
-
--- 執行反繞動作
-local function performAutoInvisEvade()
-    local char = player.Character
-    if not char then return end
-    
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    local humanoid = char:FindFirstChildOfClass("Humanoid")
-    if not hrp or not humanoid then return end
-    
-    local targetPlayer, distance = findNearestPlayerForInvis()
-    if not targetPlayer or distance > autoInvisValues.evadeRange then return end
-    
-    local targetChar = targetPlayer.Character
-    if not targetChar then return end
-    
-    local targetHRP = targetChar:FindFirstChild("HumanoidRootPart")
-    if not targetHRP then return end
-    
-    -- 檢查是否有障礙物阻擋
-    local params = RaycastParams.new()
-    params.FilterType = Enum.RaycastFilterType.Blacklist
-    params.FilterDescendantsInstances = {char, targetChar}
-    
-    local directionToTarget = targetHRP.Position - hrp.Position
-    local rayResult = Workspace:Raycast(hrp.Position, directionToTarget, params)
-    
-    if rayResult then
-        return
-    end
-    
-    -- 檢查冷卻時間
-    local currentTime = tick()
-    if currentTime - lastAutoInvisEvadeTime < autoInvisEvadeCooldown then return end
-    
-    isAutoInvisEvading = true
-    lastAutoInvisEvadeTime = currentTime
-    
-    local originalAutoRotate = humanoid.AutoRotate
-    
-    local evadeRadius = findBestEvadeRadius(hrp.Position, targetHRP.Position, char)
-    local bestPathMode = chooseBestPath(hrp.Position, targetHRP.Position, evadeRadius, char)
-    
-    -- 如果所有路徑都被阻擋，使用應急策略
-    if not bestPathMode then
-        task.spawn(function()
-            emergencyEvade(hrp, targetHRP, humanoid, char)
-            isAutoInvisEvading = false
-        end)
-        return
-    end
-    
-    local startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
-    
-    task.spawn(function()
-        local bodyVelocity = Instance.new("BodyVelocity")
-        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
-        bodyVelocity.P = 10000
-        bodyVelocity.Parent = hrp
-        
-        humanoid.AutoRotate = false
-        
-        -- 撞牆檢測變數
-        local stuckCheckInterval = 0.15
-        local lastCheckTime = tick()
-        local lastPosition = hrp.Position
-        local stuckThreshold = 1
-        local consecutiveStuckCount = 0
-        local maxStuckCount = 3
-        
-        local totalTime = (math.pi * evadeRadius) / autoInvisValues.evadeSpeed
-        local steps = math.ceil(totalTime / 0.03)
-        local stepAngle = (endAngle - startAngle) / steps
-        
-        for i = 1, steps do
-            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
-            
-            -- 檢測是否卡住
-            local currentTime = tick()
-            if currentTime - lastCheckTime >= stuckCheckInterval then
-                local distanceMoved = (hrp.Position - lastPosition).Magnitude
-                
-                if distanceMoved < stuckThreshold then
-                    consecutiveStuckCount = consecutiveStuckCount + 1
-                    
-                    if consecutiveStuckCount >= maxStuckCount then
-                        -- 切換路徑
-                        local excludePath = bestPathMode
-                        local newBestMode = bestPathMode
-                        local newBestScore = -999
-                        
-                        for mode = 1, 4 do
-                            if mode ~= excludePath then
-                                local score = evaluatePath(mode, hrp.Position, targetHRP.Position, evadeRadius, char)
-                                if score > newBestScore then
-                                    newBestScore = score
-                                    newBestMode = mode
-                                end
-                            end
-                        end
-                        
-                        if newBestMode ~= bestPathMode then
-                            bestPathMode = newBestMode
-                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
-                            
-                            local remainingAngle = endAngle - startAngle
-                            steps = math.ceil((remainingAngle * evadeRadius / autoInvisValues.evadeSpeed) / 0.03)
-                            stepAngle = remainingAngle / steps
-                            i = 0
-                        else
-                            evadeRadius = evadeRadius * 0.7
-                            startAngle, endAngle, centerPos = getPathParameters(bestPathMode, hrp.Position, targetHRP.Position, evadeRadius)
-                            steps = math.ceil((math.pi * evadeRadius / autoInvisValues.evadeSpeed) / 0.03)
-                            stepAngle = (endAngle - startAngle) / steps
-                            i = 0
-                        end
-                        
-                        consecutiveStuckCount = 0
-                    end
-                else
-                    consecutiveStuckCount = 0
-                end
-                
-                lastPosition = hrp.Position
-                lastCheckTime = currentTime
-            end
-            
-            local angle = startAngle + stepAngle * i
-            local nextAngle = startAngle + stepAngle * (i + 1)
-            
-            local currentOffset = Vector3.new(
-                math.cos(angle) * evadeRadius,
-                0,
-                math.sin(angle) * evadeRadius
-            )
-            local nextOffset = Vector3.new(
-                math.cos(nextAngle) * evadeRadius,
-                0,
-                math.sin(nextAngle) * evadeRadius
-            )
-            
-            local currentPoint = centerPos + currentOffset
-            local nextPoint = centerPos + nextOffset
-            
-            local moveDirection = (nextPoint - currentPoint).Unit
-            bodyVelocity.Velocity = moveDirection * autoInvisValues.evadeSpeed
-            
-            local lookDirection = moveDirection * Vector3.new(1, 0, 1)
-            if lookDirection.Magnitude > 0 then
-                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-            end
-            
-            task.wait(0.03)
-        end
-        
-        -- 反繞完成後繼續前進
-        local finalDirection = (hrp.Position - targetHRP.Position).Unit
-        local forwardDistance = evadeRadius
-        local forwardTime = forwardDistance / autoInvisValues.evadeSpeed
-        local forwardSteps = math.ceil(forwardTime / 0.03)
-        
-        for i = 1, forwardSteps do
-            if not isAutoInvisEvading or not autoInvisToggles.autoEvade then break end
-            
-            bodyVelocity.Velocity = finalDirection * autoInvisValues.evadeSpeed
-            
-            local lookDirection = finalDirection * Vector3.new(1, 0, 1)
-            if lookDirection.Magnitude > 0 then
-                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
-            end
-            
-            task.wait(0.03)
-        end
-        
-        bodyVelocity:Destroy()
-        humanoid.AutoRotate = originalAutoRotate
-        isAutoInvisEvading = false
-    end)
-end
-
--- 自動反繞監控
-local function startAutoInvisible()
-    if autoInvisConnections.autoEvade then autoInvisConnections.autoEvade:Disconnect() end
-    
-    if autoInvisToggles.autoEvade then
-        autoInvisConnections.autoEvade = RunService.Heartbeat:Connect(function()
-            if not isAutoInvisEvading then
-                performAutoInvisEvade()
-            end
-        end)
-    end
-end
-
 -- 隱形按鈕
 autoInvisButton.MouseButton1Click:Connect(function()
     toggles.autoInvisible = not toggles.autoInvisible
@@ -2262,12 +1408,10 @@ autoInvisButton.MouseButton1Click:Connect(function()
         startAutoInvisible()
         autoInvisStatus.Text = "開啟"
         autoInvisStatus.TextColor3 = Color3.fromRGB(138, 43, 226)
-        print("👻 自動隱形已啟動")
     else
         if autoInvisConnections.autoEvade then autoInvisConnections.autoEvade:Disconnect() end
         autoInvisStatus.Text = "關閉"
         autoInvisStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
-        print("🔆 自動隱形已關閉")
     end
     toggleUIState(autoInvisButton, autoInvisFrame, autoInvisStatus, toggles.autoInvisible)
 end)
@@ -2390,7 +1534,6 @@ closeButton.MouseButton1Click:Connect(function()
     screenGui:Destroy()
     for _, v in pairs(connections) do if v then v:Disconnect() end end
     
-    -- 清理所有 ESP
     clearESP("generators")
     clearESP("items")
     
@@ -2506,7 +1649,7 @@ task.spawn(function()
         xBtn.TextSize = 14; xBtn.TextColor3 = Color3.new(1, 1, 1); xBtn.Parent = btn
         Instance.new("UICorner").Parent = xBtn
 
-        -- 延伸按鈕（但暫時不創建延伸面板，因為現在只有 ESP 功能）
+        -- 延伸按鈕
         local extBtn = Instance.new("TextButton")
         extBtn.Name = "ExtendBtn"; extBtn.AnchorPoint = Vector2.new(0.5, 1); extBtn.Position = UDim2.new(0.5, 0, 0, -15)
         extBtn.Size = UDim2.fromOffset(56, 22); extBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
@@ -2579,7 +1722,7 @@ task.spawn(function()
             end
         end
 
-        -- ESP 按鈕點擊（使用 extBtn 作為 ESP 切換）
+        -- ESP 按鈕點擊
         extBtn.Activated:Connect(function()
             toggleESP()
             extBtn.Text = espEnabled and "ESP ✓" or "ESP"
@@ -2599,7 +1742,7 @@ task.spawn(function()
             end
         end)
 
-        -- 拖曳功能（使用拖曳把手）
+        -- 拖曳功能
         local dragging, dragInput, dragStart, startPos
         
         dragHandle.InputBegan:Connect(function(input)
@@ -2633,7 +1776,6 @@ task.spawn(function()
             for p, _ in pairs(espLabels) do cleanupESP(p) end
             for p, _ in pairs(espBoxes) do cleanupESP(p) end
             shiftLockUI:Destroy()
-            print("❌ ShiftLock + ESP 系統已關閉")
         end)
 
         -- 預設啟動 ESP
@@ -2641,7 +1783,5 @@ task.spawn(function()
         toggleESP()
         extBtn.Text = "ESP ✓"
         extBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
-
-        print("✅ ShiftLock + ESP 系統已整合（預設啟動 ESP）")
     end)
 end)
