@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v1.4 - forsaken專用)已載入"
-local update2 = "更新：移除自動反繞 只保留防反繞 優化碰壁檢測"
+local update = "Roblox 全能控制器(修改版 v1.5 - forsaken專用)已載入"
+local update2 = "更新：修正鎖定功能和防反繞鎖定"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
