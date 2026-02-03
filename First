@@ -18,10 +18,17 @@ if playerGui:FindFirstChild("SpeedJumpController") then playerGui.SpeedJumpContr
 if CoreGui:FindFirstChild("ShiftLockUI") then CoreGui.ShiftLockUI:Destroy() end
 if playerGui:FindFirstChild("ShiftLockUI") then playerGui.ShiftLockUI:Destroy() end
 
--- ShiftLock 系統變數
+-- ShiftLock 系統變數（新版）
 local shiftLockEnabled = false
 local shiftLockConnection = nil
 local shiftLockUI = nil
+local lockMode = "none"  -- "none", "shiftlock", "nearest", "click"
+local lockRotCon = nil
+local lockTargetPlayer = nil
+local lockMouseClickConn = nil
+local lastLockMode = "none"  -- 記錄防反繞啟動前的鎖定模式
+local lastClickTime = 0
+local lastClickedPlayer = nil
 
 -- ====================
 -- 核心變數與備份
@@ -90,74 +97,139 @@ local lockedTarget = nil
 local targetLockStartTime = 0
 
 -- ====================
--- ShiftLock 系統
+-- ShiftLock 系統（新版 - 包含多種鎖定模式）
 -- ====================
 
--- 禁用 ShiftLock
-local function disableShiftLock()
-    if not shiftLockEnabled then return end
+-- 清除所有鎖定模式
+local function clearAllLockModes()
+    if lockRotCon then lockRotCon:Disconnect(); lockRotCon = nil end
+    if lockMouseClickConn then lockMouseClickConn:Disconnect(); lockMouseClickConn = nil end
     
-    shiftLockEnabled = false
-    
-    if shiftLockConnection then
-        shiftLockConnection:Disconnect()
-        shiftLockConnection = nil
-    end
-    
-    -- 恢復滑鼠
     if UserInputService.MouseEnabled then
         UserInputService.MouseBehavior = Enum.MouseBehavior.Default
     end
     
-    -- 恢復自動旋轉
     local char = player.Character
     if char then
         local hum = char:FindFirstChildOfClass("Humanoid")
-        if hum then
-            hum.AutoRotate = true
-        end
+        if hum then hum.AutoRotate = true end
     end
+    
+    lockMode = "none"
+    shiftLockEnabled = false
+    lockTargetPlayer = nil
+    lastClickedPlayer = nil
 end
 
--- 啟用 ShiftLock
-local function enableShiftLock()
-    if shiftLockEnabled then return end
-    
-    shiftLockEnabled = true
-    
-    -- 鎖定滑鼠
-    if UserInputService.MouseEnabled then
-        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
-    end
+-- 設置面向旋轉
+local function setFaceRotation(type, target)
+    if lockRotCon then lockRotCon:Disconnect() end
     
     local char = player.Character
     if not char then return end
     
     local hum = char:FindFirstChildOfClass("Humanoid")
-    local hrp = char:FindFirstChild("HumanoidRootPart")
-    if not hum or not hrp then return end
+    if not hum then return end
     
     hum.AutoRotate = false
     
-    if shiftLockConnection then shiftLockConnection:Disconnect() end
-    
-    shiftLockConnection = RunService.RenderStepped:Connect(function()
+    lockRotCon = RunService.RenderStepped:Connect(function()
         local myChar = player.Character
         if not myChar then return end
         
         local myHRP = myChar:FindFirstChild("HumanoidRootPart")
         if not myHRP then return end
         
-        local cam = Workspace.CurrentCamera
-        if not cam then return end
+        local lookAtPos = nil
         
-        local lookVector = cam.CFrame.LookVector
-        local flatDir = Vector3.new(lookVector.X, 0, lookVector.Z)
+        if type == "nearest" then
+            local nearest, minDist = nil, math.huge
+            for _, p in ipairs(Players:GetPlayers()) do
+                if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                    local pRoot = p.Character.HumanoidRootPart
+                    local d = (myHRP.Position - pRoot.Position).Magnitude
+                    if d < minDist then minDist = d; nearest = pRoot end
+                end
+            end
+            if nearest then lookAtPos = nearest.Position end
+            
+        elseif type == "click" and target and target.Character then
+            local pRoot = target.Character:FindFirstChild("HumanoidRootPart")
+            if pRoot then lookAtPos = pRoot.Position end
+            
+        elseif type == "shiftlock" then
+            local cam = Workspace.CurrentCamera
+            if cam then
+                local lv = cam.CFrame.LookVector
+                lookAtPos = myHRP.Position + Vector3.new(lv.X, 0, lv.Z)
+            end
+        end
         
-        if flatDir.Magnitude > 0.001 then
-            myHRP.CFrame = CFrame.lookAt(myHRP.Position, myHRP.Position + flatDir.Unit, Vector3.yAxis)
+        if lookAtPos then
+            local flatDir = (lookAtPos - myHRP.Position) * Vector3.new(1, 0, 1)
+            if flatDir.Magnitude > 0.001 then
+                myHRP.CFrame = CFrame.lookAt(myHRP.Position, myHRP.Position + flatDir.Unit, Vector3.yAxis)
+            end
         end
     end)
+end
+
+-- 啟用 ShiftLock
+local function enableShiftLock()
+    if lockMode == "shiftlock" then return end
+    
+    clearAllLockModes()
+    lockMode = "shiftlock"
+    shiftLockEnabled = true
+    
+    if UserInputService.MouseEnabled then
+        UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+    end
+    
+    setFaceRotation("shiftlock")
+end
+
+-- 禁用所有鎖定（僅供防反繞使用）
+local function disableAllLocksForCounterEvade()
+    lastLockMode = lockMode  -- 記錄當前模式
+    if lockRotCon then lockRotCon:Disconnect(); lockRotCon = nil end
+    if lockMouseClickConn then lockMouseClickConn:Disconnect(); lockMouseClickConn = nil end
+    
+    if UserInputService.MouseEnabled then
+        UserInputService.MouseBehavior = Enum.MouseBehavior.Default
+    end
+    
+    local char = player.Character
+    if char then
+        local hum = char:FindFirstChildOfClass("Humanoid")
+        if hum then hum.AutoRotate = true end
+    end
+end
+
+-- 恢復防反繞前的鎖定模式
+local function restoreLockMode()
+    if lastLockMode == "none" then
+        return
+    end
+    
+    task.wait(0.1)
+    
+    if lastLockMode == "shiftlock" then
+        lockMode = "shiftlock"
+        shiftLockEnabled = true
+        if UserInputService.MouseEnabled then
+            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCenter
+        end
+        setFaceRotation("shiftlock")
+        
+    elseif lastLockMode == "nearest" then
+        lockMode = "nearest"
+        setFaceRotation("nearest")
+        
+    elseif lastLockMode == "click" and lockTargetPlayer then
+        lockMode = "click"
+        setFaceRotation("click", lockTargetPlayer)
+    end
 end
 
 -- ====================
@@ -308,8 +380,8 @@ local function performCounterEvade()
     isCounterEvading = true
     lastCounterEvadeTime = currentTime
     
-    -- 解除 ShiftLock
-    disableShiftLock()
+    -- 【新增】禁用所有鎖定功能（保留 ESP）
+    disableAllLocksForCounterEvade()
     
     -- 保存原始速度
     local originalWalkSpeed = humanoid.WalkSpeed
@@ -326,6 +398,8 @@ local function performCounterEvade()
         local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
         if not targetHRP then
             isCounterEvading = false
+            -- 【新增】恢復鎖定
+            restoreLockMode()
             return
         end
         
@@ -478,9 +552,8 @@ local function performCounterEvade()
             humanoid.WalkSpeed = originalSpeed
         end
         
-        -- 啟用 ShiftLock
-        task.wait(0.1)
-        enableShiftLock()
+        -- 【新增】恢復鎖定功能
+        restoreLockMode()
         
         isCounterEvading = false
     end)
@@ -1560,7 +1633,7 @@ print(update)
 print(update2)
 
 -- ====================
--- ShiftLock + ESP UI 整合
+-- ShiftLock + ESP UI 整合（新版）
 -- ====================
 task.spawn(function()
     pcall(function()
@@ -1586,27 +1659,65 @@ task.spawn(function()
             end
         end
 
-        local function getParts()
-            local c = plr.Character or plr.CharacterAdded:Wait()
-            local hum = c:FindFirstChildOfClass("Humanoid") or c:WaitForChild("Humanoid")
-            local hrp = c:FindFirstChild("HumanoidRootPart") or c:WaitForChild("HumanoidRootPart")
-            return c, hum, hrp
-        end
-
         shiftLockUI = Instance.new("ScreenGui")
         shiftLockUI.Name = "ShiftLockUI"
         shiftLockUI.ResetOnSpawn = false
         shiftLockUI.IgnoreGuiInset = true
         parentShiftUI(shiftLockUI)
 
-        -- 主按鈕
-        local btn = Instance.new("ImageButton")
+        -- 按鈕變數
+        local btn, nearBtn, clickBtn, espBtn, strk, icn
+
+        local function updateButtonState(button, active)
+            local activeColor = Color3.fromRGB(50, 100, 150)
+            local inactiveColor = Color3.fromRGB(40, 40, 45)
+            
+            Tw:Create(button, TweenInfo.new(0.2), {
+                BackgroundColor3 = active and activeColor or inactiveColor
+            }):Play()
+            
+            local stroke = button:FindFirstChild("BtnStroke")
+            if stroke then
+                Tw:Create(stroke, TweenInfo.new(0.2), {
+                    Color = active and Color3.fromRGB(0, 200, 255) or Color3.fromRGB(80, 80, 90),
+                    Thickness = active and 2 or 1
+                }):Play()
+            end
+        end
+
+        local function clearAllModesUI()
+            if lockRotCon then lockRotCon:Disconnect(); lockRotCon = nil end
+            if lockMouseClickConn then lockMouseClickConn:Disconnect(); lockMouseClickConn = nil end
+            
+            if UIS.MouseEnabled then
+                UIS.MouseBehavior = Enum.MouseBehavior.Default
+            end
+            
+            local char = plr.Character
+            if char then
+                local h = char:FindFirstChildOfClass("Humanoid")
+                if h then h.AutoRotate = true end
+            end
+            
+            icn.Image = "rbxasset://textures/ui/mouseLock_off.png"
+            Tw:Create(strk, TweenInfo.new(0.2), {Color = Color3.fromRGB(0, 140, 255), Thickness = 2}):Play()
+            Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(34, 34, 38)}):Play()
+            updateButtonState(nearBtn, false)
+            updateButtonState(clickBtn, false)
+            lockMode = "none"
+            shiftLockEnabled = false
+            lockTargetPlayer = nil
+            lastClickedPlayer = nil
+        end
+
+        -- UI 創建
+        btn = Instance.new("ImageButton")
         btn.Name = "LockBtn"; btn.AnchorPoint = Vector2.new(0.5, 0.5); btn.Size = UDim2.fromOffset(64, 64)
         btn.Position = UDim2.new(1, -30, 1, -30); btn.BackgroundColor3 = Color3.fromRGB(34, 34, 38)
         btn.AutoButtonColor = false; btn.Parent = shiftLockUI
         local cr = Instance.new("UICorner"); cr.CornerRadius = UDim.new(1, 0); cr.Parent = btn
-        local strk = Instance.new("UIStroke"); strk.Thickness = 2; strk.Color = Color3.fromRGB(0, 140, 255); strk.Parent = btn
-        local icn = Instance.new("ImageLabel")
+        strk = Instance.new("UIStroke"); strk.Thickness = 2; strk.Color = Color3.fromRGB(0, 140, 255); strk.Parent = btn
+        icn = Instance.new("ImageLabel")
         icn.Name = "Icn"; icn.BackgroundTransparency = 1; icn.AnchorPoint = Vector2.new(0.5, 0.5)
         icn.Position = UDim2.fromScale(0.5, 0.5); icn.Size = UDim2.fromScale(0.62, 0.62)
         icn.Image = "rbxasset://textures/ui/mouseLock_off.png"; icn.Parent = btn
@@ -1642,23 +1753,121 @@ task.spawn(function()
         dot3.Position = UDim2.new(0.7, 0, 0.5, -1)
         dot3.Parent = dragHandle
 
-        -- 關閉按鈕
         local xBtn = Instance.new("TextButton")
         xBtn.Name = "Close"; xBtn.AnchorPoint = Vector2.new(1, 0); xBtn.Position = UDim2.new(1, 5, 0, -5)
         xBtn.Size = UDim2.fromOffset(18, 18); xBtn.BackgroundColor3 = Color3.fromRGB(230, 60, 60); xBtn.Text = "×"
         xBtn.TextSize = 14; xBtn.TextColor3 = Color3.new(1, 1, 1); xBtn.Parent = btn
         Instance.new("UICorner").Parent = xBtn
 
-        -- 延伸按鈕
         local extBtn = Instance.new("TextButton")
         extBtn.Name = "ExtendBtn"; extBtn.AnchorPoint = Vector2.new(0.5, 1); extBtn.Position = UDim2.new(0.5, 0, 0, -15)
         extBtn.Size = UDim2.fromOffset(56, 22); extBtn.BackgroundColor3 = Color3.fromRGB(45, 45, 50)
-        extBtn.Text = "ESP"; extBtn.TextSize = 12
+        extBtn.Text = "延伸"; extBtn.TextSize = 12
         extBtn.TextColor3 = Color3.new(1, 1, 1)
         extBtn.Parent = btn
         Instance.new("UICorner").Parent = extBtn
 
-        -- ESP 相關
+        local extFrame = Instance.new("Frame")
+        extFrame.Name = "ExtFrame"; extFrame.AnchorPoint = Vector2.new(0.5, 1); extFrame.Position = UDim2.new(0.5, 0, 0, -42)
+        extFrame.Size = UDim2.fromOffset(64, 0); extFrame.BackgroundTransparency = 1; extFrame.ClipsDescendants = true; extFrame.Parent = btn
+
+        local function createExtraBtn(name, yPos)
+            local b = Instance.new("TextButton")
+            b.Name = name; b.Size = UDim2.fromOffset(60, 26); b.Position = UDim2.fromOffset(2, yPos)
+            b.BackgroundColor3 = Color3.fromRGB(40, 40, 45); b.Text = name; b.TextSize = 11; b.TextColor3 = Color3.new(1,1,1); b.Parent = extFrame
+            local c = Instance.new("UICorner"); c.CornerRadius = UDim.new(0.2,0); c.Parent = b
+            local s = Instance.new("UIStroke"); s.Thickness = 1; s.Color = Color3.fromRGB(80, 80, 90); s.Name = "BtnStroke"; s.Parent = b
+            return b
+        end
+
+        espBtn = createExtraBtn("ESP", 0)
+        nearBtn = createExtraBtn("面向最近玩家", 30)
+        clickBtn = createExtraBtn("面向雙擊玩家", 60)
+
+        -- 延伸按鈕邏輯
+        local extended = false
+        extBtn.Activated:Connect(function()
+            extended = not extended
+            extBtn.Text = extended and "收回" or "延伸"
+            extBtn.TextColor3 = Color3.new(1, 1, 1)
+            Tw:Create(extFrame, TweenInfo.new(0.3), {Size = UDim2.fromOffset(64, extended and 90 or 0)}):Play()
+        end)
+
+        -- 主 ShiftLock 按鈕
+        btn.Activated:Connect(function()
+            if lockMode == "shiftlock" then 
+                clearAllModesUI() 
+            else 
+                clearAllModesUI()
+                lockMode = "shiftlock"
+                shiftLockEnabled = true
+                if UIS.MouseEnabled then
+                    UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+                end
+                setFaceRotation("shiftlock")
+                icn.Image = "rbxasset://textures/ui/mouseLock_on.png"
+                Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(38, 48, 60)}):Play()
+            end
+        end)
+
+        -- 面向最近玩家
+        nearBtn.Activated:Connect(function()
+            if lockMode == "nearest" then 
+                clearAllModesUI() 
+            else 
+                clearAllModesUI()
+                lockMode = "nearest"
+                updateButtonState(nearBtn, true)
+                setFaceRotation("nearest")
+            end
+        end)
+
+        -- 面向雙擊玩家
+        clickBtn.Activated:Connect(function()
+            if lockMode == "click" then 
+                clearAllModesUI()
+            else
+                clearAllModesUI()
+                lockMode = "click"
+                updateButtonState(clickBtn, true)
+                
+                lockMouseClickConn = plr:GetMouse().Button1Down:Connect(function()
+                    local mouse = plr:GetMouse()
+                    local cam = Wk.CurrentCamera
+                    local ray = cam:ScreenPointToRay(mouse.X, mouse.Y)
+                    local foundPlayer = nil
+                    local minDistance = math.huge
+                    
+                    for _, p in ipairs(Plrs:GetPlayers()) do
+                        if p ~= plr and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
+                            local hrp = p.Character.HumanoidRootPart
+                            local rayToPlayer = hrp.Position - ray.Origin
+                            local projection = rayToPlayer:Dot(ray.Direction.Unit)
+                            if projection > 0 then
+                                local closestPoint = ray.Origin + ray.Direction.Unit * projection
+                                local distance = (hrp.Position - closestPoint).Magnitude
+                                if distance < 8 and projection < minDistance then 
+                                    minDistance = projection
+                                    foundPlayer = p 
+                                end
+                            end
+                        end
+                    end
+                    
+                    if foundPlayer and foundPlayer ~= plr then
+                        local now = tick()
+                        if lastClickedPlayer == foundPlayer and (now - lastClickTime) < 0.5 then 
+                            lockTargetPlayer = foundPlayer
+                            setFaceRotation("click", foundPlayer)
+                        end
+                        lastClickedPlayer = foundPlayer
+                        lastClickTime = now
+                    end
+                end)
+            end
+        end)
+
+        -- ESP 功能
         local espEnabled = false
         local espLabels = {}
         local espBoxes = {}
@@ -1682,8 +1891,9 @@ task.spawn(function()
             return box
         end
 
-        local function toggleESP()
+        espBtn.Activated:Connect(function()
             espEnabled = not espEnabled
+            updateButtonState(espBtn, espEnabled)
             
             if not espEnabled then
                 if espConn then espConn:Disconnect(); espConn = nil end
@@ -1691,7 +1901,9 @@ task.spawn(function()
                 for p, _ in pairs(espBoxes) do cleanupESP(p) end
             else
                 espConn = RS.RenderStepped:Connect(function()
-                    local _, _, myHRP = getParts()
+                    local myChar = plr.Character
+                    local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+                    
                     for _, p in ipairs(Plrs:GetPlayers()) do
                         if p ~= plr then
                             local char = p.Character
@@ -1719,26 +1931,6 @@ task.spawn(function()
                     end
                     for p, _ in pairs(espLabels) do if not Plrs:FindFirstChild(p.Name) then cleanupESP(p) end end
                 end)
-            end
-        end
-
-        -- ESP 按鈕點擊
-        extBtn.Activated:Connect(function()
-            toggleESP()
-            extBtn.Text = espEnabled and "ESP ✓" or "ESP"
-            extBtn.BackgroundColor3 = espEnabled and Color3.fromRGB(76, 175, 80) or Color3.fromRGB(45, 45, 50)
-        end)
-
-        -- ShiftLock 按鈕點擊
-        btn.Activated:Connect(function()
-            if shiftLockEnabled then
-                disableShiftLock()
-                icn.Image = "rbxasset://textures/ui/mouseLock_off.png"
-                Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(34, 34, 38)}):Play()
-            else
-                enableShiftLock()
-                icn.Image = "rbxasset://textures/ui/mouseLock_on.png"
-                Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(38, 48, 60)}):Play()
             end
         end)
 
@@ -1770,18 +1962,30 @@ task.spawn(function()
         end)
 
         -- 關閉按鈕
-        xBtn.Activated:Connect(function()
-            disableShiftLock()
+        xBtn.Activated:Connect(function() 
+            clearAllModesUI()
             if espConn then espConn:Disconnect() end
             for p, _ in pairs(espLabels) do cleanupESP(p) end
             for p, _ in pairs(espBoxes) do cleanupESP(p) end
             shiftLockUI:Destroy()
         end)
+        
+        plr.CharacterAdded:Connect(function()
+            task.wait(0.5)
+            if lockMode ~= "none" then setFaceRotation(lockMode, lockTargetPlayer) end
+        end)
 
-        -- 預設啟動 ESP
-        task.wait(0.5)
-        toggleESP()
-        extBtn.Text = "ESP ✓"
-        extBtn.BackgroundColor3 = Color3.fromRGB(76, 175, 80)
+        -- 初始化：自動啟動 ShiftLock
+        task.wait(0.1)
+        lockMode = "shiftlock"
+        shiftLockEnabled = true
+        if UIS.MouseEnabled then
+            UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
+        end
+        setFaceRotation("shiftlock")
+        icn.Image = "rbxasset://textures/ui/mouseLock_on.png"
+        Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(38, 48, 60)}):Play()
+
+        print("✅ ShiftLock + ESP 系統已整合（預設啟動 ShiftLock）")
     end)
 end)
