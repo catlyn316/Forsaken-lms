@@ -1,4 +1,4 @@
-local update = "Roblox 全能控制器(修改版 v1.5 - forsaken專用)已載入"
+local update = "Roblox 全能控制器(修改版 v1.6 - forsaken專用)已載入"
 local update2 = "更新：修正鎖定功能和防反繞鎖定"
 
 local CoreGui = game:GetService("CoreGui")
@@ -1335,11 +1335,57 @@ noFilterButton.MouseButton1Click:Connect(function()
         if connections.noFilter then connections.noFilter:Disconnect() end
         connections.noFilter = RunService.RenderStepped:Connect(function()
             for _, v in pairs(Lighting:GetChildren()) do
-                if v:IsA("PostEffect") then v:Destroy() end
+                if v:IsA("BloomEffect") then
+                    v.Enabled = false
+                    v.Intensity = 0
+                    v.Size = 0
+                    v.Threshold = 0
+                elseif v:IsA("BlurEffect") then
+                    v.Enabled = false
+                    v.Size = 0
+                elseif v:IsA("ColorCorrectionEffect") then
+                    v.Enabled = false
+                    v.Brightness = 0
+                    v.Contrast = 0
+                    v.Saturation = 0
+                    v.TintColor = Color3.new(1, 1, 1)
+                elseif v:IsA("DepthOfFieldEffect") then
+                    v.Enabled = false
+                    v.FarIntensity = 0
+                    v.NearIntensity = 0
+                elseif v:IsA("SunRaysEffect") then
+                    v.Enabled = false
+                    v.Intensity = 0
+                elseif v:IsA("PostEffect") then
+                    v.Enabled = false
+                end
             end
             if Workspace.CurrentCamera then
                  for _, v in pairs(Workspace.CurrentCamera:GetChildren()) do
-                    if v:IsA("PostEffect") then v:Destroy() end
+                    if v:IsA("BloomEffect") then
+                        v.Enabled = false
+                        v.Intensity = 0
+                        v.Size = 0
+                        v.Threshold = 0
+                    elseif v:IsA("BlurEffect") then
+                        v.Enabled = false
+                        v.Size = 0
+                    elseif v:IsA("ColorCorrectionEffect") then
+                        v.Enabled = false
+                        v.Brightness = 0
+                        v.Contrast = 0
+                        v.Saturation = 0
+                        v.TintColor = Color3.new(1, 1, 1)
+                    elseif v:IsA("DepthOfFieldEffect") then
+                        v.Enabled = false
+                        v.FarIntensity = 0
+                        v.NearIntensity = 0
+                    elseif v:IsA("SunRaysEffect") then
+                        v.Enabled = false
+                        v.Intensity = 0
+                    elseif v:IsA("PostEffect") then
+                        v.Enabled = false
+                    end
                 end
             end
         end)
@@ -1360,7 +1406,14 @@ nofogButton.MouseButton1Click:Connect(function()
         connections.nofog = RunService.RenderStepped:Connect(function()
             Lighting.FogEnd = 100000
             for _, v in pairs(Lighting:GetDescendants()) do
-                if v:IsA("Atmosphere") then v.Density = 0; v.Offset = 0 end
+                if v:IsA("Atmosphere") then 
+                    v.Density = 0
+                    v.Offset = 0
+                    v.Color = Color3.new(1, 1, 1)
+                    v.Decay = Color3.new(1, 1, 1)
+                    v.Glare = 0
+                    v.Haze = 0
+                end
             end
         end)
     else
@@ -1513,7 +1566,14 @@ task.spawn(function()
     connections.nofog = RunService.RenderStepped:Connect(function()
         Lighting.FogEnd = 100000
         for _, v in pairs(Lighting:GetDescendants()) do
-            if v:IsA("Atmosphere") then v.Density = 0; v.Offset = 0 end
+            if v:IsA("Atmosphere") then 
+                v.Density = 0
+                v.Offset = 0
+                v.Color = Color3.new(1, 1, 1)
+                v.Decay = Color3.new(1, 1, 1)
+                v.Glare = 0
+                v.Haze = 0
+            end
         end
     end)
     nofogStatus.Text = "開啟"
@@ -1525,11 +1585,57 @@ task.spawn(function()
     if connections.noFilter then connections.noFilter:Disconnect() end
     connections.noFilter = RunService.RenderStepped:Connect(function()
         for _, v in pairs(Lighting:GetChildren()) do
-            if v:IsA("PostEffect") then v:Destroy() end
+            if v:IsA("BloomEffect") then
+                v.Enabled = false
+                v.Intensity = 0
+                v.Size = 0
+                v.Threshold = 0
+            elseif v:IsA("BlurEffect") then
+                v.Enabled = false
+                v.Size = 0
+            elseif v:IsA("ColorCorrectionEffect") then
+                v.Enabled = false
+                v.Brightness = 0
+                v.Contrast = 0
+                v.Saturation = 0
+                v.TintColor = Color3.new(1, 1, 1)
+            elseif v:IsA("DepthOfFieldEffect") then
+                v.Enabled = false
+                v.FarIntensity = 0
+                v.NearIntensity = 0
+            elseif v:IsA("SunRaysEffect") then
+                v.Enabled = false
+                v.Intensity = 0
+            elseif v:IsA("PostEffect") then
+                v.Enabled = false
+            end
         end
         if Workspace.CurrentCamera then
              for _, v in pairs(Workspace.CurrentCamera:GetChildren()) do
-                if v:IsA("PostEffect") then v:Destroy() end
+                if v:IsA("BloomEffect") then
+                    v.Enabled = false
+                    v.Intensity = 0
+                    v.Size = 0
+                    v.Threshold = 0
+                elseif v:IsA("BlurEffect") then
+                    v.Enabled = false
+                    v.Size = 0
+                elseif v:IsA("ColorCorrectionEffect") then
+                    v.Enabled = false
+                    v.Brightness = 0
+                    v.Contrast = 0
+                    v.Saturation = 0
+                    v.TintColor = Color3.new(1, 1, 1)
+                elseif v:IsA("DepthOfFieldEffect") then
+                    v.Enabled = false
+                    v.FarIntensity = 0
+                    v.NearIntensity = 0
+                elseif v:IsA("SunRaysEffect") then
+                    v.Enabled = false
+                    v.Intensity = 0
+                elseif v:IsA("PostEffect") then
+                    v.Enabled = false
+                end
             end
         end
     end)
@@ -1631,6 +1737,23 @@ end)
 
 print(update)
 print(update2)
+
+-- ====================
+-- ShiftLock + ESP UI 整合
+-- ====================
+task.spawn(function()
+    pcall(function()
+        local ref = cloneref or function(x) return x end
+        local S = function(n) return ref(game:GetService(n)) end
+
+        local Plrs, Tw, UIS, RS, Wk, CG =
+            S("Players"), S("TweenService"), S("UserInputService"), S("RunService"), S("Workspace"), S("CoreGui")
+
+        local plr = Plrs.LocalPlayer
+
+        local function parentShiftUI(g)
+            if gethui then
+                g.Name = "\0" .. g.Name
 
 -- ====================
 -- ShiftLock + ESP UI 整合（新版）
@@ -1868,7 +1991,7 @@ task.spawn(function()
         end)
 
         -- ESP 功能
-        local espEnabled = true
+        local espEnabled = false
         local espLabels = {}
         local espBoxes = {}
         local espConn = nil
@@ -1975,17 +2098,44 @@ task.spawn(function()
             if lockMode ~= "none" then setFaceRotation(lockMode, lockTargetPlayer) end
         end)
 
-        -- 初始化：自動啟動 ShiftLock
+        -- 初始化：預設開啟 ESP，關閉鎖定
         task.wait(0.1)
-        lockMode = "shiftlock"
-        shiftLockEnabled = false
-        if UIS.MouseEnabled then
-            UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
-        end
-        setFaceRotation("shiftlock")
-        icn.Image = "rbxasset://textures/ui/mouseLock_on.png"
-        Tw:Create(btn, TweenInfo.new(0.2), {BackgroundColor3 = Color3.fromRGB(38, 48, 60)}):Play()
+        
+        -- 啟動 ESP
+        espEnabled = true
+        updateButtonState(espBtn, true)
+        espConn = RS.RenderStepped:Connect(function()
+            local myChar = plr.Character
+            local myHRP = myChar and myChar:FindFirstChild("HumanoidRootPart")
+            
+            for _, p in ipairs(Plrs:GetPlayers()) do
+                if p ~= plr then
+                    local char = p.Character
+                    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+                    local hum = char and char:FindFirstChildOfClass("Humanoid")
+                    if char and hrp and hum and hum.Health > 0 then
+                        if not espLabels[p] then
+                            local bg = Instance.new("BillboardGui")
+                            bg.Size = UDim2.fromOffset(200, 50); bg.AlwaysOnTop = true
+                            bg.StudsOffset = Vector3.new(0, 3, 0); bg.Parent = shiftLockUI
+                            local tl = Instance.new("TextLabel")
+                            tl.Size = UDim2.fromScale(1, 1); tl.BackgroundTransparency = 1
+                            tl.TextColor3 = Color3.new(1, 1, 1); tl.TextStrokeTransparency = 0.5
+                            tl.TextSize = 14; tl.Font = Enum.Font.SourceSansBold; tl.Parent = bg
+                            espLabels[p] = {billboard = bg, label = tl}
+                        end
+                        if not espBoxes[p] then espBoxes[p] = createESPBox(char) end
+                        local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
+                        local lab = espLabels[p]
+                        lab.billboard.Adornee = hrp
+                        lab.label.Text = string.format("名: %s\n血量: %.0f\n距離: %.1f", p.Name, hum.Health, dist)
+                        local box = espBoxes[p]; box.Adornee = char; box.Size = char:GetExtentsSize()
+                    else cleanupESP(p) end
+                end
+            end
+            for p, _ in pairs(espLabels) do if not Plrs:FindFirstChild(p.Name) then cleanupESP(p) end end
+        end)
 
-        print("✅ ShiftLock + ESP 系統已整合（預設啟動 ShiftLock）")
+        print("✅ ShiftLock + ESP 系統已整合（預設啟動 ESP，鎖定關閉）")
     end)
 end)
