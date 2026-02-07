@@ -1868,7 +1868,7 @@ task.spawn(function()
         end)
 
         -- ESP 功能
-        local espEnabled = false
+        local espEnabled = true
         local espLabels = {}
         local espBoxes = {}
         local espConn = nil
@@ -1978,7 +1978,7 @@ task.spawn(function()
         -- 初始化：自動啟動 ShiftLock
         task.wait(0.1)
         lockMode = "shiftlock"
-        shiftLockEnabled = true
+        shiftLockEnabled = false
         if UIS.MouseEnabled then
             UIS.MouseBehavior = Enum.MouseBehavior.LockCenter
         end
