@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v1.6 - forsaken專用)已載入"
-local update2 = "更新：修正鎖定功能和防反繞鎖定"
+local update = "Roblox 全能控制器(修改版 v1.7 - forsaken專用)已載入"
+local update2 = "更新：修正鎖定功能和防反繞鎖定 添加血量判定"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -140,6 +140,13 @@ local function setFaceRotation(type, target)
         local myHRP = myChar:FindFirstChild("HumanoidRootPart")
         if not myHRP then return end
         
+        -- 獲取自己的最大血量
+        local myMaxHealth = 0
+        local myHumanoid = myChar:FindFirstChildOfClass("Humanoid")
+        if myHumanoid then
+            myMaxHealth = myHumanoid.MaxHealth
+        end
+        
         local lookAtPos = nil
         
         if type == "nearest" then
@@ -147,8 +154,24 @@ local function setFaceRotation(type, target)
             for _, p in ipairs(Players:GetPlayers()) do
                 if p ~= player and p.Character and p.Character:FindFirstChild("HumanoidRootPart") then
                     local pRoot = p.Character.HumanoidRootPart
+                    local pHumanoid = p.Character:FindFirstChildOfClass("Humanoid")
+                    
+                    if pHumanoid then
+                        local pMaxHealth = pHumanoid.MaxHealth
+                        
+                        -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
+                        if pMaxHealth > 5000 and myMaxHealth <= 3000 then
+                            goto skip_player
+                        end
+                    end
+                    
                     local d = (myHRP.Position - pRoot.Position).Magnitude
-                    if d < minDist then minDist = d; nearest = pRoot end
+                    if d < minDist then 
+                        minDist = d
+                        nearest = pRoot 
+                    end
+                    
+                    ::skip_player::
                 end
             end
             if nearest then lookAtPos = nearest.Position end
@@ -297,13 +320,20 @@ end
 -- 防反繞系統（殺手模式）- 簡化版
 -- ====================
 
--- 尋找最近玩家函數（支援鎖定）
+-- 尋找最近玩家函數（支援鎖定）- 添加血量判定
 local function findNearestPlayer()
     local char = player.Character
     if not char then return nil, math.huge end
     
     local hrp = char:FindFirstChild("HumanoidRootPart")
     if not hrp then return nil, math.huge end
+    
+    -- 獲取自己的最大血量
+    local myMaxHealth = 0
+    local myHumanoid = char:FindFirstChildOfClass("Humanoid")
+    if myHumanoid then
+        myMaxHealth = myHumanoid.MaxHealth
+    end
     
     -- 如果有鎖定的目標，且鎖定時間未超過 3 秒，繼續追擊該目標
     local currentTime = tick()
@@ -312,6 +342,18 @@ local function findNearestPlayer()
             local targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
             if targetHRP then
                 local distance = (hrp.Position - targetHRP.Position).Magnitude
+                
+                -- 檢查目標血量
+                local targetHumanoid = lockedTarget.Character:FindFirstChildOfClass("Humanoid")
+                if targetHumanoid then
+                    local targetMaxHealth = targetHumanoid.MaxHealth
+                    -- 如果目標血量>5000 且 自己血量<=3000，放棄鎖定
+                    if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
+                        lockedTarget = nil
+                        return nil, math.huge
+                    end
+                end
+                
                 return lockedTarget, distance
             end
         end
@@ -324,12 +366,24 @@ local function findNearestPlayer()
     for _, otherPlayer in pairs(Players:GetPlayers()) do
         if otherPlayer ~= player and otherPlayer.Character then
             local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
-            if otherHRP then
+            local otherHumanoid = otherPlayer.Character:FindFirstChildOfClass("Humanoid")
+            
+            if otherHRP and otherHumanoid then
+                local otherMaxHealth = otherHumanoid.MaxHealth
+                
+                -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
+                if otherMaxHealth > 5000 and myMaxHealth <= 3000 then
+                    -- 跳過此玩家
+                    goto continue
+                end
+                
                 local distance = (hrp.Position - otherHRP.Position).Magnitude
                 if distance < minDistance then
                     minDistance = distance
                     nearestPlayer = otherPlayer
                 end
+                
+                ::continue::
             end
         end
     end
