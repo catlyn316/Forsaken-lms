@@ -1739,23 +1739,6 @@ print(update)
 print(update2)
 
 -- ====================
--- ShiftLock + ESP UI 整合
--- ====================
-task.spawn(function()
-    pcall(function()
-        local ref = cloneref or function(x) return x end
-        local S = function(n) return ref(game:GetService(n)) end
-
-        local Plrs, Tw, UIS, RS, Wk, CG =
-            S("Players"), S("TweenService"), S("UserInputService"), S("RunService"), S("Workspace"), S("CoreGui")
-
-        local plr = Plrs.LocalPlayer
-
-        local function parentShiftUI(g)
-            if gethui then
-                g.Name = "\0" .. g.Name
-
--- ====================
 -- ShiftLock + ESP UI 整合（新版）
 -- ====================
 task.spawn(function()
