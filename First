@@ -156,22 +156,23 @@ local function setFaceRotation(type, target)
                     local pRoot = p.Character.HumanoidRootPart
                     local pHumanoid = p.Character:FindFirstChildOfClass("Humanoid")
                     
+                    local canTarget = true
                     if pHumanoid then
                         local pMaxHealth = pHumanoid.MaxHealth
                         
                         -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
                         if pMaxHealth > 5000 and myMaxHealth <= 3000 then
-                            goto skip_player
+                            canTarget = false
                         end
                     end
                     
-                    local d = (myHRP.Position - pRoot.Position).Magnitude
-                    if d < minDist then 
-                        minDist = d
-                        nearest = pRoot 
+                    if canTarget then
+                        local d = (myHRP.Position - pRoot.Position).Magnitude
+                        if d < minDist then 
+                            minDist = d
+                            nearest = pRoot 
+                        end
                     end
-                    
-                    ::skip_player::
                 end
             end
             if nearest then lookAtPos = nearest.Position end
@@ -372,18 +373,18 @@ local function findNearestPlayer()
                 local otherMaxHealth = otherHumanoid.MaxHealth
                 
                 -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
+                local canTarget = true
                 if otherMaxHealth > 5000 and myMaxHealth <= 3000 then
-                    -- 跳過此玩家
-                    goto continue
+                    canTarget = false
                 end
                 
-                local distance = (hrp.Position - otherHRP.Position).Magnitude
-                if distance < minDistance then
-                    minDistance = distance
-                    nearestPlayer = otherPlayer
+                if canTarget then
+                    local distance = (hrp.Position - otherHRP.Position).Magnitude
+                    if distance < minDistance then
+                        minDistance = distance
+                        nearestPlayer = otherPlayer
+                    end
                 end
-                
-                ::continue::
             end
         end
     end
