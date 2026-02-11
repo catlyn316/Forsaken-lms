@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v1.7 - forsaken專用)已載入"
-local update2 = "更新：修正鎖定功能和防反繞鎖定 添加血量判定"
+local update = "Roblox 全能控制器(修改版 v1.9 - forsaken專用)已載入"
+local update2 = "更新：修復目標死亡檢測 手動鎖定優先級 危險目標逃離觸發"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -68,7 +68,8 @@ local values = {
     fullbright = 1,
     cameraDist = 80,
     evadeRange = 15,
-    evadeSpeed = 30
+    evadeSpeed = 30,
+    minDistance = 3  -- 最小距離
 }
 
 -- 連線儲存
@@ -95,6 +96,8 @@ local lastCounterEvadeTime = 0
 local counterEvadeCooldown = 1
 local lockedTarget = nil
 local targetLockStartTime = 0
+local manualLockedTarget = nil  -- 手動雙擊鎖定的目標
+local isFleeingFromDanger = false  -- 是否正在逃離危險目標
 
 -- ====================
 -- ShiftLock 系統（新版 - 包含多種鎖定模式）
@@ -321,7 +324,7 @@ end
 -- 防反繞系統（殺手模式）- 簡化版
 -- ====================
 
--- 尋找最近玩家函數（支援鎖定）- 添加血量判定
+-- 尋找最近玩家函數（支援鎖定）- 添加血量判定和手動鎖定
 local function findNearestPlayer()
     local char = player.Character
     if not char then return nil, math.huge end
@@ -336,27 +339,59 @@ local function findNearestPlayer()
         myMaxHealth = myHumanoid.MaxHealth
     end
     
-    -- 如果有鎖定的目標，且鎖定時間未超過 3 秒，繼續追擊該目標
+    -- 如果有手動鎖定的目標，優先使用（不受3秒限制）
+    if manualLockedTarget then
+        if manualLockedTarget.Character then
+            local targetHRP = manualLockedTarget.Character:FindFirstChild("HumanoidRootPart")
+            local targetHumanoid = manualLockedTarget.Character:FindFirstChildOfClass("Humanoid")
+            
+            -- 檢查目標是否死亡（血量為0）
+            if targetHumanoid and targetHumanoid.Health > 0 and targetHRP then
+                local distance = (hrp.Position - targetHRP.Position).Magnitude
+                
+                -- 檢查目標血量
+                local targetMaxHealth = targetHumanoid.MaxHealth
+                if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
+                    -- 血量不符，但不清除手動鎖定（讓玩家自己決定）
+                end
+                
+                return manualLockedTarget, distance
+            else
+                -- 目標死亡（血量為0），清除手動鎖定
+                print("🎯 手動鎖定目標已死亡，解除鎖定")
+                manualLockedTarget = nil
+            end
+        else
+            manualLockedTarget = nil
+        end
+    end
+    
+    -- 如果有自動鎖定的目標，且鎖定時間未超過 3 秒，繼續追擊該目標
     local currentTime = tick()
     if lockedTarget and (currentTime - targetLockStartTime) < 3 then
         if lockedTarget.Character then
             local targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
-            if targetHRP then
+            local targetHumanoid = lockedTarget.Character:FindFirstChildOfClass("Humanoid")
+            
+            -- 檢查目標是否死亡（血量為0）
+            if targetHumanoid and targetHumanoid.Health > 0 and targetHRP then
                 local distance = (hrp.Position - targetHRP.Position).Magnitude
                 
                 -- 檢查目標血量
-                local targetHumanoid = lockedTarget.Character:FindFirstChildOfClass("Humanoid")
-                if targetHumanoid then
-                    local targetMaxHealth = targetHumanoid.MaxHealth
-                    -- 如果目標血量>5000 且 自己血量<=3000，放棄鎖定
-                    if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
-                        lockedTarget = nil
-                        return nil, math.huge
-                    end
+                local targetMaxHealth = targetHumanoid.MaxHealth
+                -- 如果目標血量>5000 且 自己血量<=3000，放棄鎖定
+                if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
+                    lockedTarget = nil
+                    return nil, math.huge
                 end
                 
                 return lockedTarget, distance
+            else
+                -- 目標死亡，清除鎖定
+                lockedTarget = nil
             end
+        else
+            lockedTarget = nil
         end
     end
     
@@ -369,7 +404,7 @@ local function findNearestPlayer()
             local otherHRP = otherPlayer.Character:FindFirstChild("HumanoidRootPart")
             local otherHumanoid = otherPlayer.Character:FindFirstChildOfClass("Humanoid")
             
-            if otherHRP and otherHumanoid then
+            if otherHRP and otherHumanoid and otherHumanoid.Health > 0 then
                 local otherMaxHealth = otherHumanoid.MaxHealth
                 
                 -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
@@ -398,6 +433,97 @@ local function findNearestPlayer()
     return nearestPlayer, minDistance
 end
 
+-- 檢測目標是否為危險目標
+local function isDangerousTarget(targetPlayer)
+    if not targetPlayer or not targetPlayer.Character then
+        return false
+    end
+    
+    local humanoid = targetPlayer.Character:FindFirstChildOfClass("Humanoid")
+    if not humanoid then
+        return false
+    end
+    
+    local parentName = humanoid.Parent and humanoid.Parent.Name or ""
+    local speed = humanoid.WalkSpeed
+    
+    -- 調試信息
+    -- print(string.format("檢測目標: %s, Parent: %s, 速度: %.1f", targetPlayer.Name, parentName, speed))
+    
+    -- 檢測 Shedletsky、Chance、TwoTime 且速度<5
+    if (parentName == "Shedletsky" or parentName == "Chance" or parentName == "TwoTime") then
+        if speed < 5 then
+            print(string.format("⚠️ 危險目標檢測: %s (Parent: %s, 速度: %.1f < 5)", targetPlayer.Name, parentName, speed))
+            return true
+        end
+    end
+    
+    -- 檢測 Guest1337 且速度=4.8或10.4
+    if parentName == "Guest1337" then
+        if math.abs(speed - 4.8) < 0.1 or math.abs(speed - 10.4) < 0.1 then
+            print(string.format("⚠️ 危險目標檢測: %s (Parent: %s, 速度: %.1f)", targetPlayer.Name, parentName, speed))
+            return true
+        end
+    end
+    
+    return false
+end
+
+-- 逃離危險目標
+local function fleeFromDangerousTarget(targetPlayer)
+    local char = player.Character
+    if not char then return end
+    
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local humanoid = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not humanoid then return end
+    
+    local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
+    if not targetHRP then return end
+    
+    isFleeingFromDanger = true
+    
+    -- 禁用所有鎖定
+    disableAllLocksForCounterEvade()
+    
+    task.spawn(function()
+        local bodyVelocity = Instance.new("BodyVelocity")
+        bodyVelocity.MaxForce = Vector3.new(100000, 0, 100000)
+        bodyVelocity.P = 10000
+        bodyVelocity.Parent = hrp
+        
+        humanoid.AutoRotate = false
+        
+        -- 計算逃離方向（背離目標）
+        local fleeDirection = (hrp.Position - targetHRP.Position).Unit
+        
+        -- 逃離1.5秒
+        local fleeTime = 1.5
+        local fleeSteps = math.ceil(fleeTime / 0.03)
+        
+        for i = 1, fleeSteps do
+            if not isFleeingFromDanger then break end
+            
+            bodyVelocity.Velocity = fleeDirection * values.evadeSpeed
+            
+            local lookDirection = fleeDirection * Vector3.new(1, 0, 1)
+            if lookDirection.Magnitude > 0 then
+                hrp.CFrame = CFrame.new(hrp.Position, hrp.Position + lookDirection)
+            end
+            
+            task.wait(0.03)
+        end
+        
+        bodyVelocity:Destroy()
+        humanoid.AutoRotate = true
+        
+        isFleeingFromDanger = false
+        
+        -- 恢復鎖定
+        restoreLockMode()
+    end)
+end
+
 -- 執行防反繞動作（殺手追擊玩家）
 local function performCounterEvade()
     local char = player.Character
@@ -410,6 +536,22 @@ local function performCounterEvade()
     local targetPlayer, distance = findNearestPlayer()
     if not targetPlayer then return end
     if distance > values.evadeRange then return end
+    
+    -- 【新增】檢測危險目標
+    if isDangerousTarget(targetPlayer) then
+        print("⚠️ 檢測到危險目標，自動逃離！")
+        -- 清除所有鎖定
+        lockedTarget = nil
+        manualLockedTarget = nil
+        -- 立即逃離
+        fleeFromDangerousTarget(targetPlayer)
+        return
+    end
+    
+    -- 【新增】檢查最小距離，如果已經夠近就不追了
+    if distance <= values.minDistance then
+        return
+    end
     
     -- 檢查是否有障礙物阻擋
     local targetHRP = targetPlayer.Character and targetPlayer.Character:FindFirstChild("HumanoidRootPart")
@@ -488,9 +630,57 @@ local function performCounterEvade()
         local targetCirclingDetection = {}  -- 繞圈檢測
         local circlingCheckCount = 0
         
+        -- 【新增】最小距離相關變數
+        local reachedMinDistance = false  -- 是否已到達最小距離
+        local lastDistanceCheckTime = tick()
+        local distanceCheckInterval = 0.2  -- 每0.2秒檢查一次距離
+        
+        -- 【新增】危險目標標志
+        local detectedDangerousTarget = false
+        
         for i = 1, steps do
             if not isCounterEvading or not toggles.counterEvade then
                 break
+            end
+            
+            -- 【新增】持續檢測危險目標
+            if isDangerousTarget(targetPlayer) then
+                print("⚠️ 追擊中檢測到危險目標，立即逃離！")
+                lockedTarget = nil
+                manualLockedTarget = nil
+                detectedDangerousTarget = true
+                break
+            end
+            
+            -- 【修改】最小距離檢測：如果已到達最小距離，檢測目標是否移動
+            local currentDistance = (hrp.Position - targetHRP.Position).Magnitude
+            local currentTime = tick()
+            
+            if currentDistance <= values.minDistance then
+                if not reachedMinDistance then
+                    -- 第一次到達最小距離
+                    reachedMinDistance = true
+                    lastTargetPosition = targetHRP.Position
+                    lastDistanceCheckTime = currentTime
+                end
+                
+                -- 檢查目標是否移動
+                if currentTime - lastDistanceCheckTime >= distanceCheckInterval then
+                    local targetMoved = (targetHRP.Position - lastTargetPosition).Magnitude
+                    
+                    if targetMoved < 1 then
+                        -- 目標沒移動，停止追擊
+                        break
+                    else
+                        -- 目標移動了，繼續追擊
+                        reachedMinDistance = false
+                        lastTargetPosition = targetHRP.Position
+                        lastDistanceCheckTime = currentTime
+                    end
+                end
+            else
+                -- 距離大於最小距離，重置標記
+                reachedMinDistance = false
             end
             
             -- 偽裝模式: 檢查速度是否小於5
@@ -598,6 +788,24 @@ local function performCounterEvade()
         -- 清理
         bodyVelocity:Destroy()
         humanoid.AutoRotate = true
+        
+        -- 【新增】檢查是否需要逃離危險目標（使用標志或重新檢測）
+        if detectedDangerousTarget or isDangerousTarget(targetPlayer) then
+            print("⚠️ 檢測到危險目標，開始逃離！")
+            -- 恢復速度設置
+            if wasSpeedActive then
+                toggles.speed = true
+                applySpeed()
+            else
+                humanoid.WalkSpeed = originalSpeed
+            end
+            
+            isCounterEvading = false
+            
+            -- 執行逃離
+            fleeFromDangerousTarget(targetPlayer)
+            return
+        end
         
         -- 恢復速度設置
         if wasSpeedActive then
@@ -1264,13 +1472,14 @@ local noFilterFrame, noFilterStatus, noFilterButton = createControlRow(page1, "�
 local evadeFrame, evadeStatus, evadeButton = createControlRow(page2, "防反繞:", "", "", false, 1)
 local evadeRangeFrame, evadeRangeInput = createInputOnlyRow(page2, "追擊範圍:", "15", 2)
 local evadeSpeedFrame, evadeSpeedInput = createInputOnlyRow(page2, "追擊速度:", "30", 3)
+local minDistanceFrame, minDistanceInput = createInputOnlyRow(page2, "最小距離:", "3", 4)
 
 -- 添加防反繞模式選擇
 local counterModeFrame = Instance.new("Frame")
 counterModeFrame.Size = UDim2.new(1, 0, 0, 35)
 counterModeFrame.BackgroundColor3 = Color3.fromRGB(248, 249, 250)
 counterModeFrame.BorderSizePixel = 0
-counterModeFrame.LayoutOrder = 4
+counterModeFrame.LayoutOrder = 5
 counterModeFrame.Parent = page2
 Instance.new("UICorner", counterModeFrame).CornerRadius = UDim.new(0, 6)
 
@@ -1506,6 +1715,7 @@ evadeButton.MouseButton1Click:Connect(function()
     if toggles.counterEvade then
         values.evadeRange = tonumber(evadeRangeInput.Text) or 15
         values.evadeSpeed = tonumber(evadeSpeedInput.Text) or 30
+        values.minDistance = tonumber(minDistanceInput.Text) or 3
         
         startCounterEvade()
         evadeStatus.Text = "開啟"
@@ -1514,6 +1724,9 @@ evadeButton.MouseButton1Click:Connect(function()
         if connections.counterEvade then connections.counterEvade:Disconnect() end
         evadeStatus.Text = "關閉"
         evadeStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+        -- 【新增】關閉防反繞時清除手動鎖定
+        manualLockedTarget = nil
+        lockedTarget = nil
     end
     toggleUIState(evadeButton, evadeFrame, evadeStatus, toggles.counterEvade)
 end)
@@ -1544,6 +1757,11 @@ end)
 evadeSpeedInput.FocusLost:Connect(function()
     values.evadeSpeed = tonumber(evadeSpeedInput.Text) or 30
     evadeSpeedInput.Text = tostring(values.evadeSpeed)
+end)
+
+minDistanceInput.FocusLost:Connect(function()
+    values.minDistance = tonumber(minDistanceInput.Text) or 3
+    minDistanceInput.Text = tostring(values.minDistance)
 end)
 
 -- 發電機顯示
@@ -2020,6 +2238,12 @@ task.spawn(function()
                         if lastClickedPlayer == foundPlayer and (now - lastClickTime) < 0.5 then 
                             lockTargetPlayer = foundPlayer
                             setFaceRotation("click", foundPlayer)
+                            
+                            -- 【新增】如果防反繞開啟，將此目標設為防反繞的手動鎖定目標
+                            if toggles.counterEvade then
+                                manualLockedTarget = foundPlayer
+                                print("🎯 已將 " .. foundPlayer.Name .. " 設為防反繞目標")
+                            end
                         end
                         lastClickedPlayer = foundPlayer
                         lastClickTime = now
@@ -2085,7 +2309,7 @@ task.spawn(function()
                                 local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
                                 local lab = espLabels[p]
                                 lab.billboard.Adornee = hrp
-                                lab.label.Text = string.format("名: %s\n血量: %.0f\n距離: %.1f", p.Name, hum.Health, dist)
+                                lab.label.Text = string.format("名: %s\n血量: %.0f/%.0f\n距離: %.1f", p.Name, hum.Health, hum.MaxHealth, dist)
                                 local box = espBoxes[p]; box.Adornee = char; box.Size = char:GetExtentsSize()
                             else cleanupESP(p) end
                         end
@@ -2166,7 +2390,7 @@ task.spawn(function()
                         local dist = myHRP and (myHRP.Position - hrp.Position).Magnitude or 0
                         local lab = espLabels[p]
                         lab.billboard.Adornee = hrp
-                        lab.label.Text = string.format("名: %s\n血量: %.0f\n距離: %.1f", p.Name, hum.Health, dist)
+                        lab.label.Text = string.format("名: %s\n血量: %.0f/%.0f\n距離: %.1f", p.Name, hum.Health, hum.MaxHealth, dist)
                         local box = espBoxes[p]; box.Adornee = char; box.Size = char:GetExtentsSize()
                     else cleanupESP(p) end
                 end
