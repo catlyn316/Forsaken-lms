@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v1.9 - forsaken專用)已載入"
-local update2 = "更新：修復目標死亡檢測 手動鎖定優先級 危險目標逃離觸發"
+local update = "Roblox 全能控制器(修改版 v2.1 - 鬼抓人遊戲通用)已載入"
+local update2 = "更新：die of death分頁加入完整11個能力與冷卻倒數顯示"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -339,55 +339,48 @@ local function findNearestPlayer()
         myMaxHealth = myHumanoid.MaxHealth
     end
     
-    -- 如果有手動鎖定的目標，優先使用（不受3秒限制）
+    -- ★ 優先使用手動鎖定目標（不受任何時間或距離限制）
     if manualLockedTarget then
         if manualLockedTarget.Character then
             local targetHRP = manualLockedTarget.Character:FindFirstChild("HumanoidRootPart")
             local targetHumanoid = manualLockedTarget.Character:FindFirstChildOfClass("Humanoid")
             
-            -- 檢查目標是否死亡（血量為0）
             if targetHumanoid and targetHumanoid.Health > 0 and targetHRP then
                 local distance = (hrp.Position - targetHRP.Position).Magnitude
-                
-                -- 檢查目標血量
-                local targetMaxHealth = targetHumanoid.MaxHealth
-                if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
-                    -- 血量不符，但不清除手動鎖定（讓玩家自己決定）
-                end
-                
                 return manualLockedTarget, distance
             else
-                -- 目標死亡（血量為0），清除手動鎖定
-                print("🎯 手動鎖定目標已死亡，解除鎖定")
+                -- 目標血量為0，解除手動鎖定
+                print("🎯 手動鎖定目標已死亡（血量為0），解除鎖定")
                 manualLockedTarget = nil
+                lockedTarget = nil
+                return nil, math.huge
             end
         else
             manualLockedTarget = nil
+            lockedTarget = nil
+            return nil, math.huge
         end
     end
     
-    -- 如果有自動鎖定的目標，且鎖定時間未超過 3 秒，繼續追擊該目標
-    local currentTime = tick()
-    if lockedTarget and (currentTime - targetLockStartTime) < 3 then
+    -- ★ 自動鎖定目標：只要目標存活就持續追（不設時間限制）
+    if lockedTarget then
         if lockedTarget.Character then
             local targetHRP = lockedTarget.Character:FindFirstChild("HumanoidRootPart")
             local targetHumanoid = lockedTarget.Character:FindFirstChildOfClass("Humanoid")
             
-            -- 檢查目標是否死亡（血量為0）
             if targetHumanoid and targetHumanoid.Health > 0 and targetHRP then
                 local distance = (hrp.Position - targetHRP.Position).Magnitude
                 
-                -- 檢查目標血量
-                local targetMaxHealth = targetHumanoid.MaxHealth
-                -- 如果目標血量>5000 且 自己血量<=3000，放棄鎖定
-                if targetMaxHealth > 5000 and myMaxHealth <= 3000 then
+                -- 血量判定：如果目標血量>5000 且 自己血量<=3000，放棄鎖定並尋找其他目標
+                if targetHumanoid.MaxHealth > 5000 and myMaxHealth <= 3000 then
                     lockedTarget = nil
-                    return nil, math.huge
+                    -- 不直接 return，讓下面繼續找最近的玩家
+                else
+                    return lockedTarget, distance
                 end
-                
-                return lockedTarget, distance
             else
-                -- 目標死亡，清除鎖定
+                -- 目標血量為0，清除鎖定並尋找新目標
+                print("🎯 自動鎖定目標已死亡（血量為0），重新尋找")
                 lockedTarget = nil
             end
         else
@@ -395,9 +388,10 @@ local function findNearestPlayer()
         end
     end
     
-    -- 如果沒有鎖定目標，或鎖定時間已過，尋找新的最近玩家
+    -- 沒有鎖定目標時，尋找最近的玩家並鎖定
     local nearestPlayer = nil
     local minDistance = math.huge
+    local currentTime = tick()
     
     for _, otherPlayer in pairs(Players:GetPlayers()) do
         if otherPlayer ~= player and otherPlayer.Character then
@@ -405,13 +399,8 @@ local function findNearestPlayer()
             local otherHumanoid = otherPlayer.Character:FindFirstChildOfClass("Humanoid")
             
             if otherHRP and otherHumanoid and otherHumanoid.Health > 0 then
-                local otherMaxHealth = otherHumanoid.MaxHealth
-                
-                -- 血量判定：如果對方血量>5000 且 自己血量<=3000，跳過這個目標
-                local canTarget = true
-                if otherMaxHealth > 5000 and myMaxHealth <= 3000 then
-                    canTarget = false
-                end
+                -- 血量判定
+                local canTarget = not (otherHumanoid.MaxHealth > 5000 and myMaxHealth <= 3000)
                 
                 if canTarget then
                     local distance = (hrp.Position - otherHRP.Position).Magnitude
@@ -424,7 +413,7 @@ local function findNearestPlayer()
         end
     end
     
-    -- 如果找到新目標，鎖定它
+    -- 鎖定找到的新目標
     if nearestPlayer then
         lockedTarget = nearestPlayer
         targetLockStartTime = currentTime
@@ -1268,7 +1257,7 @@ Instance.new("UICorner", titleBar).CornerRadius = UDim.new(0, 10)
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -60, 1, 0)
 title.BackgroundTransparency = 1
-title.Text = "貓玲的forsaken控制器"
+title.Text = "貓玲的鬼抓人遊戲控制器"
 title.TextSize = 14
 title.Font = Enum.Font.GothamBold
 title.TextColor3 = Color3.fromRGB(255, 255, 255)
@@ -1292,31 +1281,62 @@ closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
 closeButton.Parent = titleBar
 Instance.new("UICorner", closeButton).CornerRadius = UDim.new(0, 5)
 
--- 分頁系統
+-- 分頁系統（可橫向滾動）
 local tabBar = Instance.new("Frame")
 tabBar.Size = UDim2.new(0.9, 0, 0, 28)
 tabBar.Position = UDim2.new(0.05, 0, 0, 38)
 tabBar.BackgroundColor3 = Color3.fromRGB(240, 240, 240)
 tabBar.Parent = mainFrame
+tabBar.ClipsDescendants = true
 Instance.new("UICorner", tabBar).CornerRadius = UDim.new(0, 6)
+
+-- 可滾動的內部容器
+local tabScroll = Instance.new("ScrollingFrame")
+tabScroll.Size = UDim2.new(1, 0, 1, 0)
+tabScroll.BackgroundTransparency = 1
+tabScroll.BorderSizePixel = 0
+tabScroll.ScrollBarThickness = 0
+tabScroll.ScrollingDirection = Enum.ScrollingDirection.X
+tabScroll.CanvasSize = UDim2.new(0, 240, 0, 0)
+tabScroll.Parent = tabBar
+
+local tabLayout = Instance.new("UIListLayout")
+tabLayout.FillDirection = Enum.FillDirection.Horizontal
+tabLayout.Padding = UDim.new(0, 2)
+tabLayout.SortOrder = Enum.SortOrder.LayoutOrder
+tabLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+tabLayout.Parent = tabScroll
 
 local function createTab(text, index)
     local tab = Instance.new("TextButton")
-    tab.Size = UDim2.new(0.33, -4, 1, -4)
-    tab.Position = UDim2.new((index-1) * 0.33, 2, 0, 2)
+    tab.Size = UDim2.new(0, 58, 1, -4)
     tab.BackgroundColor3 = Color3.fromRGB(200, 200, 200)
     tab.Text = text
-    tab.TextSize = 12
+    tab.TextSize = 11
     tab.Font = Enum.Font.GothamBold
     tab.TextColor3 = Color3.fromRGB(100, 100, 100)
-    tab.Parent = tabBar
+    tab.LayoutOrder = index
+    tab.Parent = tabScroll
     Instance.new("UICorner", tab).CornerRadius = UDim.new(0, 4)
     return tab
 end
 
 local tab1 = createTab("基本設置", 1)
 local tab2 = createTab("防反繞", 2)
-local tab3 = createTab("其他", 3)
+local tab3 = createTab("forsaken", 3)
+local tab4 = createTab("die of death", 4)
+
+-- 自動調整 CanvasSize
+local function updateTabScrollCanvas()
+    local totalWidth = 0
+    for _, child in ipairs(tabScroll:GetChildren()) do
+        if child:IsA("TextButton") then
+            totalWidth = totalWidth + child.AbsoluteSize.X + 2
+        end
+    end
+    tabScroll.CanvasSize = UDim2.new(0, totalWidth + 4, 0, 0)
+end
+task.defer(updateTabScrollCanvas)
 
 local contentContainer = Instance.new("Frame")
 contentContainer.Size = UDim2.new(0.9, 0, 0, 150) 
@@ -1348,22 +1368,24 @@ end
 local page1 = createScrollingPage(contentContainer)
 local page2 = createScrollingPage(contentContainer)
 local page3 = createScrollingPage(contentContainer)
+local page4 = createScrollingPage(contentContainer)
 page1.Visible = true
 
 local function switchTab(pageNum)
     page1.Visible = (pageNum == 1)
     page2.Visible = (pageNum == 2)
     page3.Visible = (pageNum == 3)
-    tab1.BackgroundColor3 = (pageNum == 1) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
-    tab1.TextColor3 = (pageNum == 1) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
-    tab2.BackgroundColor3 = (pageNum == 2) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
-    tab2.TextColor3 = (pageNum == 2) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
-    tab3.BackgroundColor3 = (pageNum == 3) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
-    tab3.TextColor3 = (pageNum == 3) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
+    page4.Visible = (pageNum == 4)
+    local tabs = {tab1, tab2, tab3, tab4}
+    for i, tab in ipairs(tabs) do
+        tab.BackgroundColor3 = (pageNum == i) and Color3.fromRGB(102, 126, 234) or Color3.fromRGB(200, 200, 200)
+        tab.TextColor3 = (pageNum == i) and Color3.new(1,1,1) or Color3.fromRGB(100,100,100)
+    end
 end
 tab1.MouseButton1Click:Connect(function() switchTab(1) end)
 tab2.MouseButton1Click:Connect(function() switchTab(2) end)
 tab3.MouseButton1Click:Connect(function() switchTab(3) end)
+tab4.MouseButton1Click:Connect(function() switchTab(4) end)
 
 -- 通用UI創建函數
 local function createControlRow(parent, labelText, placeholder, defaultVal, isInput, order)
@@ -1515,10 +1537,10 @@ counterModeStatus.Font = Enum.Font.GothamBold
 counterModeStatus.TextColor3 = Color3.fromRGB(76, 175, 80)
 counterModeStatus.Parent = counterModeFrame
 
--- 頁面 3 - 其他
+-- 頁面 3 - forsaken
 local generatorESPFrame, generatorESPStatus, generatorESPButton = createControlRow(page3, "發電機顯示:", "", "", false, 1)
 local itemESPFrame, itemESPStatus, itemESPButton = createControlRow(page3, "物品顯示:", "", "", false, 2)
-local autoInvisFrame, autoInvisStatus, autoInvisButton = createControlRow(page3, "隱形(可能掉虛空):", "", "", false, 3)
+local autoInvisFrame, autoInvisStatus, autoInvisButton = createControlRow(page3, "隱形(forsaken用):", "", "", false, 3)
 
 local statusLabel = Instance.new("TextLabel")
 statusLabel.Size = UDim2.new(0.9, 0, 0, 26)
@@ -1814,6 +1836,241 @@ autoInvisButton.MouseButton1Click:Connect(function()
     end
     toggleUIState(autoInvisButton, autoInvisFrame, autoInvisStatus, toggles.autoInvisible)
 end)
+
+-- ====================
+-- 頁面 4 - die of death
+-- ====================
+
+-- 輔助函數：建立分區標題
+local function createSectionHeader(parent, text, order)
+    local header = Instance.new("Frame")
+    header.Size = UDim2.new(1, 0, 0, 24)
+    header.BackgroundColor3 = Color3.fromRGB(102, 126, 234)
+    header.BorderSizePixel = 0
+    header.LayoutOrder = order
+    header.Parent = parent
+    Instance.new("UICorner", header).CornerRadius = UDim.new(0, 6)
+    local label = Instance.new("TextLabel")
+    label.Size = UDim2.new(1, -8, 1, 0)
+    label.Position = UDim2.new(0, 8, 0, 0)
+    label.BackgroundTransparency = 1
+    label.Text = text
+    label.TextSize = 12
+    label.Font = Enum.Font.GothamBold
+    label.TextColor3 = Color3.new(1, 1, 1)
+    label.TextXAlignment = Enum.TextXAlignment.Left
+    label.Parent = header
+    return header
+end
+
+-- 輔助函數：建立選擇按鈕組
+local function createChoiceButton(parent, text, color, order)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(0.3, -4, 0, 28)
+    btn.BackgroundColor3 = color or Color3.fromRGB(80, 80, 90)
+    btn.Text = text
+    btn.TextSize = 11
+    btn.Font = Enum.Font.GothamBold
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.LayoutOrder = order
+    btn.Parent = parent
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    local stroke = Instance.new("UIStroke")
+    stroke.Thickness = 1
+    stroke.Color = Color3.fromRGB(120, 120, 130)
+    stroke.Parent = btn
+    return btn, stroke
+end
+
+-- ▌部分一：選角色
+createSectionHeader(page4, "▌ 選角色", 10)
+
+local charBtnFrame = Instance.new("Frame")
+charBtnFrame.Size = UDim2.new(1, 0, 0, 36)
+charBtnFrame.BackgroundTransparency = 1
+charBtnFrame.LayoutOrder = 11
+charBtnFrame.Parent = page4
+local charBtnLayout = Instance.new("UIListLayout")
+charBtnLayout.FillDirection = Enum.FillDirection.Horizontal
+charBtnLayout.Padding = UDim.new(0, 4)
+charBtnLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+charBtnLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+charBtnLayout.Parent = charBtnFrame
+
+local btnNormal, strokeNormal = createChoiceButton(charBtnFrame, "普通", Color3.fromRGB(70, 130, 180), 1)
+local btnCaretaker, strokeCaretaker = createChoiceButton(charBtnFrame, "治療墊", Color3.fromRGB(60, 160, 100), 2)
+local btnRevolver, strokeRevolver = createChoiceButton(charBtnFrame, "愛槍", Color3.fromRGB(180, 80, 80), 3)
+
+-- 角色選擇結果提示
+local charResultLabel = Instance.new("TextLabel")
+charResultLabel.Size = UDim2.new(1, 0, 0, 20)
+charResultLabel.BackgroundTransparency = 1
+charResultLabel.Text = "尚未選擇角色"
+charResultLabel.TextSize = 11
+charResultLabel.Font = Enum.Font.Gotham
+charResultLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+charResultLabel.LayoutOrder = 12
+charResultLabel.Parent = page4
+
+local function setCharBtnSelected(selectedStroke)
+    for _, s in ipairs({strokeNormal, strokeCaretaker, strokeRevolver}) do
+        s.Color = Color3.fromRGB(120, 120, 130)
+        s.Thickness = 1
+    end
+    selectedStroke.Color = Color3.fromRGB(255, 220, 0)
+    selectedStroke.Thickness = 2
+end
+
+btnNormal.MouseButton1Click:Connect(function()
+    setCharBtnSelected(strokeNormal)
+    charResultLabel.Text = "✓ 已選：普通 (Cloak)"
+    charResultLabel.TextColor3 = Color3.fromRGB(70, 130, 180)
+    pcall(function()
+        local args = {{"Cloak"}}
+        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
+    end)
+end)
+
+btnCaretaker.MouseButton1Click:Connect(function()
+    setCharBtnSelected(strokeCaretaker)
+    charResultLabel.Text = "✓ 已選：治療墊 (BonusPad)"
+    charResultLabel.TextColor3 = Color3.fromRGB(60, 160, 100)
+    pcall(function()
+        local args = {{"Caretaker", "BonusPad"}}
+        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
+    end)
+end)
+
+btnRevolver.MouseButton1Click:Connect(function()
+    setCharBtnSelected(strokeRevolver)
+    charResultLabel.Text = "✓ 已選：愛槍 (Revolver)"
+    charResultLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
+    pcall(function()
+        local args = {{"Caretaker", "Revolver"}}
+        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
+    end)
+end)
+
+-- ▌部分二：自用能力
+createSectionHeader(page4, "▌ 自用能力", 20)
+
+-- 能力定義 {顯示名, 事件名, 冷卻秒數}
+local abilities = {
+    {"防禦",    "Block",        40},
+    {"隱形",    "Cloak",        40},
+    {"手槍",    "Revolver",     15},
+    {"揍人",    "Punch",        40},
+    {"回血藥水","Caretaker",    30},
+    {"加速板",  "BonusPad",     60},
+    {"熱狗",    "Hotdog",       25},
+    {"嘲諷",    "Taunt",        25},
+    {"腎上腺素","Adrenaline",   35},
+    {"香蕉皮",  "Banana",       20},
+    {"衝刺",    "Dash",         20},
+}
+
+-- 顏色列表（循環使用）
+local abilityColors = {
+    Color3.fromRGB(100, 100, 200),
+    Color3.fromRGB(100, 60, 160),
+    Color3.fromRGB(180, 100, 40),
+    Color3.fromRGB(180, 70, 70),
+    Color3.fromRGB(60, 160, 100),
+    Color3.fromRGB(70, 130, 180),
+    Color3.fromRGB(180, 130, 40),
+    Color3.fromRGB(160, 80, 140),
+    Color3.fromRGB(80, 160, 160),
+    Color3.fromRGB(140, 160, 60),
+    Color3.fromRGB(100, 150, 200),
+}
+
+-- 冷卻狀態
+local abilityCooldowns = {}
+for i = 1, #abilities do
+    abilityCooldowns[i] = 0
+end
+
+-- 每個能力一個按鈕行
+for i, ability in ipairs(abilities) do
+    local abilityName, eventName, cooldown = ability[1], ability[2], ability[3]
+    local color = abilityColors[((i-1) % #abilityColors) + 1]
+    
+    local row = Instance.new("Frame")
+    row.Size = UDim2.new(1, 0, 0, 30)
+    row.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
+    row.BorderSizePixel = 0
+    row.LayoutOrder = 20 + i
+    row.Parent = page4
+    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+    
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.BackgroundColor3 = color
+    btn.Text = string.format("%s（%ds）", abilityName, cooldown)
+    btn.TextSize = 12
+    btn.Font = Enum.Font.GothamBold
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.AutoButtonColor = false
+    btn.Parent = row
+    Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+    
+    -- 冷卻覆蓋層
+    local cooldownOverlay = Instance.new("Frame")
+    cooldownOverlay.Size = UDim2.new(0, 0, 1, 0)
+    cooldownOverlay.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    cooldownOverlay.BackgroundTransparency = 0.4
+    cooldownOverlay.BorderSizePixel = 0
+    cooldownOverlay.ZIndex = 2
+    cooldownOverlay.Visible = false
+    cooldownOverlay.Parent = btn
+    Instance.new("UICorner", cooldownOverlay).CornerRadius = UDim.new(0, 6)
+    
+    -- 閉包保存變數
+    local btnRef = btn
+    local overlayRef = cooldownOverlay
+    local abilityIndex = i
+    local originalColor = color
+    
+    btn.MouseButton1Click:Connect(function()
+        -- 無論冷卻與否都觸發（以防冷卻時間錯誤）
+        pcall(function()
+            local args = {eventName}
+            game:GetService("ReplicatedStorage")
+                :WaitForChild("Events")
+                :WaitForChild("RemoteFunctions")
+                :WaitForChild("UseAbility")
+                :InvokeServer(unpack(args))
+        end)
+        
+        -- 啟動冷卻倒數（視覺顯示）
+        local now = tick()
+        abilityCooldowns[abilityIndex] = now + cooldown
+        overlayRef.Visible = true
+        
+        task.spawn(function()
+            local endTime = abilityCooldowns[abilityIndex]
+            while tick() < endTime do
+                local remaining = math.ceil(endTime - tick())
+                local progress = (endTime - tick()) / cooldown
+                progress = math.clamp(progress, 0, 1)
+                
+                -- 更新按鈕文字顯示冷卻
+                btnRef.Text = string.format("%s（%ds）", abilityName, remaining)
+                
+                -- 更新覆蓋層寬度（從右到左消退）
+                overlayRef.Size = UDim2.new(progress, 0, 1, 0)
+                overlayRef.Position = UDim2.new(0, 0, 0, 0)
+                
+                task.wait(0.1)
+            end
+            
+            -- 冷卻結束
+            overlayRef.Visible = false
+            overlayRef.Size = UDim2.new(0, 0, 1, 0)
+            btnRef.Text = string.format("%s（%ds）", abilityName, cooldown)
+        end)
+    end)
+end
 
 -- 自動啟用功能
 task.spawn(function()
