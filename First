@@ -59,7 +59,8 @@ local toggles = {
     generatorESP = false,
     itemESP = false,
     autoInvisible = false,
-    counterEvadeMode = "disguise"  -- "disguise" 或 "fullpower"
+    counterEvadeMode = "disguise",  -- "disguise" 或 "fullpower"
+    infiniteStamina = false
 }
 
 -- 數值設定
@@ -81,7 +82,8 @@ local connections = {
     counterEvade = nil,  -- 改名
     generatorESP = nil,
     itemESP = nil,
-    autoInvisible = nil
+    autoInvisible = nil,
+    infiniteStamina = nil
 }
 
 -- ESP 顯示緩存
@@ -1485,10 +1487,11 @@ end
 
 -- 頁面 1 - 基本設置
 local speedFrame, speedInput, speedButton = createControlRow(page1, "速度:", "34", "34", true, 1)
-local fullbrightFrame, fullbrightInput, fullbrightButton = createControlRow(page1, "全亮:", "1", "1", true, 2)
-local cameraDistFrame, cameraDistInput, cameraDistButton = createControlRow(page1, "鏡頭距離:", "80", "80", true, 3)
-local nofogFrame, nofogStatus, nofogButton = createControlRow(page1, "除霧:", "", "", false, 4)
-local noFilterFrame, noFilterStatus, noFilterButton = createControlRow(page1, "無濾鏡:", "", "", false, 5)
+local infiniteStaminaFrame, infiniteStaminaStatus, infiniteStaminaButton = createControlRow(page1, "無限體力:", "", "", false, 2)
+local fullbrightFrame, fullbrightInput, fullbrightButton = createControlRow(page1, "全亮:", "1", "1", true, 3)
+local cameraDistFrame, cameraDistInput, cameraDistButton = createControlRow(page1, "鏡頭距離:", "80", "80", true, 4)
+local nofogFrame, nofogStatus, nofogButton = createControlRow(page1, "除霧:", "", "", false, 5)
+local noFilterFrame, noFilterStatus, noFilterButton = createControlRow(page1, "無濾鏡:", "", "", false, 6)
 
 -- 頁面 2 - 防反繞
 local evadeFrame, evadeStatus, evadeButton = createControlRow(page2, "防反繞:", "", "", false, 1)
@@ -1598,6 +1601,91 @@ speedButton.MouseButton1Click:Connect(function()
         applySpeed()
     end
     toggleUIState(speedButton, speedFrame, speedInput, toggles.speed)
+end)
+
+-- 無限體力
+local originalMaxStamina = nil  -- 記錄原始 MaxStamina
+
+local function findMaxStaminaAttribute()
+    -- 在 Workspace 下搜尋使用者的 MaxStamina attribute
+    local char = player.Character
+    if not char then return nil, nil end
+    
+    -- 先找 Character 本身
+    local val = char:GetAttribute("MaxStamina")
+    if val ~= nil then return char, "MaxStamina" end
+    
+    -- 遞迴搜尋所有子物件
+    local function searchChildren(parent)
+        for _, child in pairs(parent:GetChildren()) do
+            local v = child:GetAttribute("MaxStamina")
+            if v ~= nil then return child, "MaxStamina" end
+            local found, attr = searchChildren(child)
+            if found then return found, attr end
+        end
+        return nil, nil
+    end
+    return searchChildren(char)
+end
+
+local function startInfiniteStamina()
+    if connections.infiniteStamina then
+        connections.infiniteStamina:Disconnect()
+        connections.infiniteStamina = nil
+    end
+    
+    -- 立即執行一次
+    local obj, attr = findMaxStaminaAttribute()
+    if obj then
+        if originalMaxStamina == nil then
+            originalMaxStamina = obj:GetAttribute(attr)
+        end
+        obj:SetAttribute(attr, 1000)
+    end
+    
+    -- 持續監控
+    connections.infiniteStamina = RunService.Heartbeat:Connect(function()
+        if not toggles.infiniteStamina then return end
+        
+        local targetObj, targetAttr = findMaxStaminaAttribute()
+        if targetObj then
+            local current = targetObj:GetAttribute(targetAttr)
+            -- 如果值不是1000（可能被遊戲重設），強制改回1000
+            if current ~= 1000 then
+                if originalMaxStamina == nil then
+                    originalMaxStamina = current
+                end
+                targetObj:SetAttribute(targetAttr, 1000)
+            end
+        end
+    end)
+end
+
+infiniteStaminaButton.MouseButton1Click:Connect(function()
+    toggles.infiniteStamina = not toggles.infiniteStamina
+    if toggles.infiniteStamina then
+        originalMaxStamina = nil
+        startInfiniteStamina()
+        infiniteStaminaStatus.Text = "開啟"
+        infiniteStaminaStatus.TextColor3 = Color3.fromRGB(46, 125, 50)
+    else
+        -- 停止監控
+        if connections.infiniteStamina then
+            connections.infiniteStamina:Disconnect()
+            connections.infiniteStamina = nil
+        end
+        -- 恢復原始值
+        if originalMaxStamina ~= nil then
+            local obj, attr = findMaxStaminaAttribute()
+            if obj then
+                obj:SetAttribute(attr, originalMaxStamina)
+            end
+            originalMaxStamina = nil
+        end
+        infiniteStaminaStatus.Text = "關閉"
+        infiniteStaminaStatus.TextColor3 = Color3.fromRGB(150, 150, 150)
+    end
+    toggleUIState(infiniteStaminaButton, infiniteStaminaFrame, infiniteStaminaStatus, toggles.infiniteStamina)
 end)
 
 -- 全亮
