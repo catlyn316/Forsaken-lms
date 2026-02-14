@@ -1,5 +1,5 @@
-local update = "Roblox 全能控制器(修改版 v2.1 - 鬼抓人遊戲通用)已載入"
-local update2 = "更新：die of death分頁加入完整11個能力與冷卻倒數顯示"
+local update = "Roblox 全能控制器(修改版 v2.2 - 鬼抓人遊戲通用)已載入"
+local update2 = "更新：選角色加入自選能力 所有按鈕3個一行 普通角色去掉Cloak"
 
 local CoreGui = game:GetService("CoreGui")
 local Players = game:GetService("Players")
@@ -1885,76 +1885,47 @@ end
 -- ▌部分一：選角色
 createSectionHeader(page4, "▌ 選角色", 10)
 
-local charBtnFrame = Instance.new("Frame")
-charBtnFrame.Size = UDim2.new(1, 0, 0, 36)
-charBtnFrame.BackgroundTransparency = 1
-charBtnFrame.LayoutOrder = 11
-charBtnFrame.Parent = page4
-local charBtnLayout = Instance.new("UIListLayout")
-charBtnLayout.FillDirection = Enum.FillDirection.Horizontal
-charBtnLayout.Padding = UDim.new(0, 4)
-charBtnLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-charBtnLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-charBtnLayout.Parent = charBtnFrame
+-- 說明文字
+local charHintLabel = Instance.new("TextLabel")
+charHintLabel.Size = UDim2.new(1, 0, 0, 18)
+charHintLabel.BackgroundTransparency = 1
+charHintLabel.Text = "先選角色類型，再選最多2項能力"
+charHintLabel.TextSize = 10
+charHintLabel.Font = Enum.Font.Gotham
+charHintLabel.TextColor3 = Color3.fromRGB(120, 120, 140)
+charHintLabel.LayoutOrder = 11
+charHintLabel.Parent = page4
 
-local btnNormal, strokeNormal = createChoiceButton(charBtnFrame, "普通", Color3.fromRGB(70, 130, 180), 1)
-local btnCaretaker, strokeCaretaker = createChoiceButton(charBtnFrame, "治療墊", Color3.fromRGB(60, 160, 100), 2)
-local btnRevolver, strokeRevolver = createChoiceButton(charBtnFrame, "愛槍", Color3.fromRGB(180, 80, 80), 3)
+-- 角色類型按鈕（3個一行）
+local charTypeFrame = Instance.new("Frame")
+charTypeFrame.Size = UDim2.new(1, 0, 0, 32)
+charTypeFrame.BackgroundTransparency = 1
+charTypeFrame.LayoutOrder = 12
+charTypeFrame.Parent = page4
+local charTypeLayout = Instance.new("UIListLayout")
+charTypeLayout.FillDirection = Enum.FillDirection.Horizontal
+charTypeLayout.Padding = UDim.new(0, 4)
+charTypeLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+charTypeLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+charTypeLayout.Parent = charTypeFrame
 
--- 角色選擇結果提示
-local charResultLabel = Instance.new("TextLabel")
-charResultLabel.Size = UDim2.new(1, 0, 0, 20)
-charResultLabel.BackgroundTransparency = 1
-charResultLabel.Text = "尚未選擇角色"
-charResultLabel.TextSize = 11
-charResultLabel.Font = Enum.Font.Gotham
-charResultLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
-charResultLabel.LayoutOrder = 12
-charResultLabel.Parent = page4
+local btnNormal, strokeNormal = createChoiceButton(charTypeFrame, "普通", Color3.fromRGB(70, 130, 180), 1)
+local btnCaretaker, strokeCaretaker = createChoiceButton(charTypeFrame, "治療墊", Color3.fromRGB(60, 160, 100), 2)
+local btnRevolver, strokeRevolver = createChoiceButton(charTypeFrame, "愛槍", Color3.fromRGB(180, 80, 80), 3)
 
-local function setCharBtnSelected(selectedStroke)
-    for _, s in ipairs({strokeNormal, strokeCaretaker, strokeRevolver}) do
-        s.Color = Color3.fromRGB(120, 120, 130)
-        s.Thickness = 1
-    end
-    selectedStroke.Color = Color3.fromRGB(255, 220, 0)
-    selectedStroke.Thickness = 2
-end
+-- 能力選擇提示
+local abilitySelectLabel = Instance.new("TextLabel")
+abilitySelectLabel.Size = UDim2.new(1, 0, 0, 18)
+abilitySelectLabel.BackgroundTransparency = 1
+abilitySelectLabel.Text = "選能力（最多2項）："
+abilitySelectLabel.TextSize = 10
+abilitySelectLabel.Font = Enum.Font.GothamBold
+abilitySelectLabel.TextColor3 = Color3.fromRGB(80, 80, 100)
+abilitySelectLabel.TextXAlignment = Enum.TextXAlignment.Left
+abilitySelectLabel.LayoutOrder = 13
+abilitySelectLabel.Parent = page4
 
-btnNormal.MouseButton1Click:Connect(function()
-    setCharBtnSelected(strokeNormal)
-    charResultLabel.Text = "✓ 已選：普通 (Cloak)"
-    charResultLabel.TextColor3 = Color3.fromRGB(70, 130, 180)
-    pcall(function()
-        local args = {{"Cloak"}}
-        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
-    end)
-end)
-
-btnCaretaker.MouseButton1Click:Connect(function()
-    setCharBtnSelected(strokeCaretaker)
-    charResultLabel.Text = "✓ 已選：治療墊 (BonusPad)"
-    charResultLabel.TextColor3 = Color3.fromRGB(60, 160, 100)
-    pcall(function()
-        local args = {{"Caretaker", "BonusPad"}}
-        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
-    end)
-end)
-
-btnRevolver.MouseButton1Click:Connect(function()
-    setCharBtnSelected(strokeRevolver)
-    charResultLabel.Text = "✓ 已選：愛槍 (Revolver)"
-    charResultLabel.TextColor3 = Color3.fromRGB(180, 80, 80)
-    pcall(function()
-        local args = {{"Caretaker", "Revolver"}}
-        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
-    end)
-end)
-
--- ▌部分二：自用能力
-createSectionHeader(page4, "▌ 自用能力", 20)
-
--- 能力定義 {顯示名, 事件名, 冷卻秒數}
+-- 能力定義（選角用 + 自用共用同一張表）
 local abilities = {
     {"防禦",    "Block",        40},
     {"隱形",    "Cloak",        40},
@@ -1969,7 +1940,6 @@ local abilities = {
     {"衝刺",    "Dash",         20},
 }
 
--- 顏色列表（循環使用）
 local abilityColors = {
     Color3.fromRGB(100, 100, 200),
     Color3.fromRGB(100, 60, 160),
@@ -1984,34 +1954,220 @@ local abilityColors = {
     Color3.fromRGB(100, 150, 200),
 }
 
+-- 選角能力選擇狀態
+local selectedAbilities = {}  -- {index = true/false}
+local selectedCharType = nil  -- "normal" / "caretaker" / "revolver"
+local charAbilityStrokes = {} -- 保存每個選角能力按鈕的 stroke
+
+-- 結果提示
+local charResultLabel = Instance.new("TextLabel")
+charResultLabel.Size = UDim2.new(1, 0, 0, 18)
+charResultLabel.BackgroundTransparency = 1
+charResultLabel.Text = "尚未選擇角色"
+charResultLabel.TextSize = 10
+charResultLabel.Font = Enum.Font.Gotham
+charResultLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+charResultLabel.LayoutOrder = 99
+charResultLabel.Parent = page4
+
+-- 確認送出按鈕
+local confirmBtn = Instance.new("TextButton")
+confirmBtn.Size = UDim2.new(1, 0, 0, 28)
+confirmBtn.BackgroundColor3 = Color3.fromRGB(102, 126, 234)
+confirmBtn.Text = "確認送出"
+confirmBtn.TextSize = 12
+confirmBtn.Font = Enum.Font.GothamBold
+confirmBtn.TextColor3 = Color3.new(1, 1, 1)
+confirmBtn.LayoutOrder = 100
+confirmBtn.Parent = page4
+Instance.new("UICorner", confirmBtn).CornerRadius = UDim.new(0, 6)
+
+-- 建立能力選擇格（3個一行，先算要幾行）
+local abilityPickRows = {}
+local currentPickRow = nil
+for i, ability in ipairs(abilities) do
+    local col = (i - 1) % 3
+    if col == 0 then
+        currentPickRow = Instance.new("Frame")
+        currentPickRow.Size = UDim2.new(1, 0, 0, 32)
+        currentPickRow.BackgroundTransparency = 1
+        currentPickRow.LayoutOrder = 13 + math.ceil(i / 3)
+        currentPickRow.Parent = page4
+        local rowLayout = Instance.new("UIListLayout")
+        rowLayout.FillDirection = Enum.FillDirection.Horizontal
+        rowLayout.Padding = UDim.new(0, 4)
+        rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        rowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+        rowLayout.Parent = currentPickRow
+        table.insert(abilityPickRows, currentPickRow)
+    end
+    
+    local abilityName = ability[1]
+    local color = abilityColors[((i-1) % #abilityColors) + 1]
+    
+    local pickBtn = Instance.new("TextButton")
+    pickBtn.Size = UDim2.new(0.3, -4, 1, -2)
+    pickBtn.BackgroundColor3 = color
+    pickBtn.Text = abilityName
+    pickBtn.TextSize = 10
+    pickBtn.Font = Enum.Font.GothamBold
+    pickBtn.TextColor3 = Color3.new(1, 1, 1)
+    pickBtn.AutoButtonColor = false
+    pickBtn.LayoutOrder = col + 1
+    pickBtn.Parent = currentPickRow
+    Instance.new("UICorner", pickBtn).CornerRadius = UDim.new(0, 5)
+    local pickStroke = Instance.new("UIStroke")
+    pickStroke.Thickness = 1
+    pickStroke.Color = Color3.fromRGB(120, 120, 130)
+    pickStroke.Parent = pickBtn
+    charAbilityStrokes[i] = pickStroke
+    
+    local abilityIdx = i
+    pickBtn.MouseButton1Click:Connect(function()
+        if selectedAbilities[abilityIdx] then
+            -- 取消選擇
+            selectedAbilities[abilityIdx] = nil
+            pickStroke.Color = Color3.fromRGB(120, 120, 130)
+            pickStroke.Thickness = 1
+        else
+            -- 計算已選數量
+            local count = 0
+            for _ in pairs(selectedAbilities) do count = count + 1 end
+            if count >= 2 then
+                charResultLabel.Text = "⚠ 最多只能選2項能力"
+                charResultLabel.TextColor3 = Color3.fromRGB(220, 80, 80)
+                return
+            end
+            selectedAbilities[abilityIdx] = true
+            pickStroke.Color = Color3.fromRGB(255, 220, 0)
+            pickStroke.Thickness = 2
+        end
+        -- 更新提示
+        local picked = {}
+        for idx in pairs(selectedAbilities) do
+            table.insert(picked, abilities[idx][1])
+        end
+        if #picked > 0 then
+            charResultLabel.Text = "已選能力：" .. table.concat(picked, "、")
+            charResultLabel.TextColor3 = Color3.fromRGB(80, 150, 80)
+        else
+            charResultLabel.Text = "尚未選擇能力"
+            charResultLabel.TextColor3 = Color3.fromRGB(150, 150, 150)
+        end
+    end)
+end
+
+-- 角色類型選擇
+local charTypeStrokes = {strokeNormal, strokeCaretaker, strokeRevolver}
+local function setCharTypeSelected(selectedStroke, typeName)
+    for _, s in ipairs(charTypeStrokes) do
+        s.Color = Color3.fromRGB(120, 120, 130)
+        s.Thickness = 1
+    end
+    selectedStroke.Color = Color3.fromRGB(255, 220, 0)
+    selectedStroke.Thickness = 2
+    selectedCharType = typeName
+end
+
+btnNormal.MouseButton1Click:Connect(function()
+    setCharTypeSelected(strokeNormal, "normal")
+end)
+btnCaretaker.MouseButton1Click:Connect(function()
+    setCharTypeSelected(strokeCaretaker, "caretaker")
+end)
+btnRevolver.MouseButton1Click:Connect(function()
+    setCharTypeSelected(strokeRevolver, "revolver")
+end)
+
+-- 確認送出邏輯
+confirmBtn.MouseButton1Click:Connect(function()
+    if not selectedCharType then
+        charResultLabel.Text = "⚠ 請先選擇角色類型"
+        charResultLabel.TextColor3 = Color3.fromRGB(220, 80, 80)
+        return
+    end
+    
+    -- 收集已選能力的事件名
+    local pickedEvents = {}
+    for idx in pairs(selectedAbilities) do
+        table.insert(pickedEvents, abilities[idx][2])
+    end
+    
+    -- 依角色類型組裝 args
+    local argsInner = {}
+    if selectedCharType == "normal" then
+        -- 普通：只填能力（無預設）
+        for _, ev in ipairs(pickedEvents) do
+            table.insert(argsInner, ev)
+        end
+    elseif selectedCharType == "caretaker" then
+        table.insert(argsInner, "Caretaker")
+        table.insert(argsInner, "BonusPad")
+        for _, ev in ipairs(pickedEvents) do
+            table.insert(argsInner, ev)
+        end
+    elseif selectedCharType == "revolver" then
+        table.insert(argsInner, "Caretaker")
+        table.insert(argsInner, "Revolver")
+        for _, ev in ipairs(pickedEvents) do
+            table.insert(argsInner, ev)
+        end
+    end
+    
+    pcall(function()
+        local args = {argsInner}
+        game:GetService("ReplicatedStorage"):WaitForChild("Events"):WaitForChild("RemoteEvents"):WaitForChild("AbilitySelection"):FireServer(unpack(args))
+    end)
+    
+    local typeNames = {normal="普通", caretaker="治療墊", revolver="愛槍"}
+    local picked = {}
+    for idx in pairs(selectedAbilities) do table.insert(picked, abilities[idx][1]) end
+    local abilityStr = #picked > 0 and ("＋" .. table.concat(picked, "＋")) or ""
+    charResultLabel.Text = "✓ 已送出：" .. typeNames[selectedCharType] .. abilityStr
+    charResultLabel.TextColor3 = Color3.fromRGB(60, 160, 100)
+end)
+
+-- ====================
+-- ▌部分二：自用能力
+createSectionHeader(page4, "▌ 自用能力", 200)
+
 -- 冷卻狀態
 local abilityCooldowns = {}
 for i = 1, #abilities do
     abilityCooldowns[i] = 0
 end
 
--- 每個能力一個按鈕行
+-- 每3個能力一行
+local currentAbilityRow = nil
 for i, ability in ipairs(abilities) do
     local abilityName, eventName, cooldown = ability[1], ability[2], ability[3]
     local color = abilityColors[((i-1) % #abilityColors) + 1]
+    local col = (i - 1) % 3
     
-    local row = Instance.new("Frame")
-    row.Size = UDim2.new(1, 0, 0, 30)
-    row.BackgroundColor3 = Color3.fromRGB(245, 245, 248)
-    row.BorderSizePixel = 0
-    row.LayoutOrder = 20 + i
-    row.Parent = page4
-    Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+    if col == 0 then
+        currentAbilityRow = Instance.new("Frame")
+        currentAbilityRow.Size = UDim2.new(1, 0, 0, 34)
+        currentAbilityRow.BackgroundTransparency = 1
+        currentAbilityRow.LayoutOrder = 200 + math.ceil(i / 3)
+        currentAbilityRow.Parent = page4
+        local rowLayout = Instance.new("UIListLayout")
+        rowLayout.FillDirection = Enum.FillDirection.Horizontal
+        rowLayout.Padding = UDim.new(0, 4)
+        rowLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
+        rowLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+        rowLayout.Parent = currentAbilityRow
+    end
     
     local btn = Instance.new("TextButton")
-    btn.Size = UDim2.new(1, 0, 1, 0)
+    btn.Size = UDim2.new(0.3, -4, 1, -2)
     btn.BackgroundColor3 = color
-    btn.Text = string.format("%s（%ds）", abilityName, cooldown)
-    btn.TextSize = 12
+    btn.Text = string.format("%s\n%ds", abilityName, cooldown)
+    btn.TextSize = 10
     btn.Font = Enum.Font.GothamBold
     btn.TextColor3 = Color3.new(1, 1, 1)
     btn.AutoButtonColor = false
-    btn.Parent = row
+    btn.LayoutOrder = col + 1
+    btn.Parent = currentAbilityRow
     Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
     
     -- 冷卻覆蓋層
@@ -2025,14 +2181,11 @@ for i, ability in ipairs(abilities) do
     cooldownOverlay.Parent = btn
     Instance.new("UICorner", cooldownOverlay).CornerRadius = UDim.new(0, 6)
     
-    -- 閉包保存變數
     local btnRef = btn
     local overlayRef = cooldownOverlay
     local abilityIndex = i
-    local originalColor = color
     
     btn.MouseButton1Click:Connect(function()
-        -- 無論冷卻與否都觸發（以防冷卻時間錯誤）
         pcall(function()
             local args = {eventName}
             game:GetService("ReplicatedStorage")
@@ -2042,7 +2195,6 @@ for i, ability in ipairs(abilities) do
                 :InvokeServer(unpack(args))
         end)
         
-        -- 啟動冷卻倒數（視覺顯示）
         local now = tick()
         abilityCooldowns[abilityIndex] = now + cooldown
         overlayRef.Visible = true
@@ -2051,23 +2203,14 @@ for i, ability in ipairs(abilities) do
             local endTime = abilityCooldowns[abilityIndex]
             while tick() < endTime do
                 local remaining = math.ceil(endTime - tick())
-                local progress = (endTime - tick()) / cooldown
-                progress = math.clamp(progress, 0, 1)
-                
-                -- 更新按鈕文字顯示冷卻
-                btnRef.Text = string.format("%s（%ds）", abilityName, remaining)
-                
-                -- 更新覆蓋層寬度（從右到左消退）
+                local progress = math.clamp((endTime - tick()) / cooldown, 0, 1)
+                btnRef.Text = string.format("%s\n%ds", abilityName, remaining)
                 overlayRef.Size = UDim2.new(progress, 0, 1, 0)
-                overlayRef.Position = UDim2.new(0, 0, 0, 0)
-                
                 task.wait(0.1)
             end
-            
-            -- 冷卻結束
             overlayRef.Visible = false
             overlayRef.Size = UDim2.new(0, 0, 1, 0)
-            btnRef.Text = string.format("%s（%ds）", abilityName, cooldown)
+            btnRef.Text = string.format("%s\n%ds", abilityName, cooldown)
         end)
     end)
 end
